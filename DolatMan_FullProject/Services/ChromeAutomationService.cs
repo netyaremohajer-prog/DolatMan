@@ -254,7 +254,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         var otp = await requestOtp();
         if (string.IsNullOrWhiteSpace(otp))
             throw new OperationCanceledException("ورود کد پیامکی لغو شد.", cancellationToken);
-        await EnterOtpAndVerifyAsync(otp.Trim());
+        await EnterOtpForAutomaticVerificationAsync(otp.Trim());
         progress.Report("کد پیامکی در فرم سامانه وارد شد؛ در حال بررسی نتیجه ورود...");
         await WaitForAuthenticatedPortalAsync(TimeSpan.FromMinutes(5), cancellationToken);
 
@@ -336,17 +336,19 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         await _page!.BringToFrontAsync();
     }
 
-    private async Task EnterOtpAndVerifyAsync(string otp)
+    private async Task EnterOtpForAutomaticVerificationAsync(string otp)
     {
         RequirePage();
         var code = ToAsciiDigits(otp.Trim());
         if (code.Length < 4 || code.Length > 8)
             throw new InvalidOperationException("کد پیامکی باید بین ۴ تا ۸ رقم باشد.");
 
-        // Prefer split one-character OTP boxes before looking for a single labelled input.
-        // Many identity portals render one box per digit.
+        // The official portal automatically validates the OTP as soon as the last digit
+        // is entered. Do not search for or click a separate confirm/submit button here.
+        // The caller waits for the authenticated portal state immediately after this method.
         var splitBoxes = _page!.Locator("input:visible[maxlength='1']");
         var splitCount = await splitBoxes.CountAsync();
+
         if (splitCount >= code.Length)
         {
             for (var i = 0; i < code.Length; i++)
@@ -354,14 +356,24 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 var box = splitBoxes.Nth(i);
                 await box.ClickAsync();
                 await box.FillAsync(string.Empty);
-                await box.PressSequentiallyAsync(code[i].ToString(), new LocatorPressSequentiallyOptions { Timeout = 5000 });
+                await box.PressSequentiallyAsync(
+                    code[i].ToString(),
+                    new LocatorPressSequentiallyOptions { Timeout = 5000 });
             }
+
+            var entered = new System.Text.StringBuilder();
+            for (var i = 0; i < code.Length; i++)
+                entered.Append(ToAsciiDigits(await splitBoxes.Nth(i).InputValueAsync()));
+
+            if (entered.ToString() != code)
+                throw new InvalidOperationException("رقم‌های کد پیامکی به‌درستی در کادرهای سامانه وارد نشدند.");
         }
         else
         {
             var selector = "input:visible, textarea:visible, [contenteditable='true']:visible, [role='textbox']:visible";
             var otpInput = await FindByDescriptionAsync(selector,
                 new[] { "کد تایید", "کد تأیید", "کد یکبار مصرف", "کد یک‌بار مصرف", "کد پیامکی", "otp", "verification", "one-time" });
+
             if (otpInput is null)
             {
                 var candidates = await GetEditableInputsAsync();
@@ -374,17 +386,18 @@ public sealed class ChromeAutomationService : IAsyncDisposable
 
             await otpInput.ClickAsync();
             await otpInput.FillAsync(string.Empty);
-            await otpInput.PressSequentiallyAsync(code, new LocatorPressSequentiallyOptions { Timeout = 10000 });
+            await otpInput.PressSequentiallyAsync(code,
+                new LocatorPressSequentiallyOptions { Timeout = 10000 });
+
             var actual = ToAsciiDigits(await otpInput.InputValueAsync());
             if (actual != code)
                 throw new InvalidOperationException("کد پیامکی در کادر سامانه درست ثبت نشد؛ کد را در Chrome بررسی کنید.");
         }
 
-        var verify = await FindClickableByTextAsync(new[] { "تأیید", "تایید", "ورود", "ادامه" });
-        if (verify is null)
-            throw new InvalidOperationException("کد در فرم وارد شد، اما دکمه تأیید/ورود پیدا نشد. لطفاً دکمه را در Chrome دستی بزنید.");
-        await verify.ClickAsync(new LocatorClickOptions { Timeout = 15000 });
-        await _page!.BringToFrontAsync();
+        // Give the portal's last-digit input handler a brief moment to start its
+        // automatic verification/navigation. No extra click is sent.
+        await Task.Delay(300);
+        await _page.BringToFrontAsync();
     }
 
     private async Task WaitForAuthenticatedPortalAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -419,7 +432,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         }
 
         throw new TimeoutException(
-            "ورود در زمان مجاز کامل نشد. کد پیامکی را در Chrome وارد و تأیید کنید. " +
+            "ورود در زمان مجاز کامل نشد. پس از ورود آخرین رقم کد پیامکی، سامانه باید آن را خودکار بررسی کند؛ " +
             "اگر خطای سامانه یا کد اشتباه نمایش داده می‌شود، آن را برطرف کرده و اجرای پرونده را دوباره آغاز کنید.");
     }
 
