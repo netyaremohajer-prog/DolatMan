@@ -505,13 +505,25 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         });
                       if (!candidates.length) return 'not-found';
                       const chosen = candidates[0].el;
-                      const actionable = chosen.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li') ||
-                        chosen.closest('div') || chosen;
+                      let actionable = chosen.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li,input[type=radio]');
+                      if (!actionable) {
+                        let node = chosen;
+                        for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
+                          const style = getComputedStyle(node);
+                          const cls = node.className?.toString() || '';
+                          if (node.onclick || style.cursor === 'pointer' || /tab|card|option|choice|select/i.test(cls)) {
+                            actionable = node;
+                            break;
+                          }
+                        }
+                      }
+                      actionable ||= chosen.parentElement || chosen;
                       const selected = actionable.getAttribute('aria-selected') === 'true' ||
                         actionable.getAttribute('aria-checked') === 'true' ||
                         actionable.getAttribute('aria-pressed') === 'true' ||
+                        actionable.getAttribute('aria-current') === 'true' ||
                         actionable.checked === true ||
-                        /(^|\s)(active|selected|checked)(\s|$)/i.test(actionable.className?.toString() || '');
+                        /active|selected|checked/i.test(actionable.className?.toString() || '');
                       if (selected) return 'already-selected';
                       actionable.scrollIntoView({ block: 'center', inline: 'center' });
                       actionable.click();
