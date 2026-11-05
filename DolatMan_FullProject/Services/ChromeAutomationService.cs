@@ -780,9 +780,9 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 new BrowserTypeLaunchPersistentContextOptions
                 {
                     Channel = "chrome",
-                    // Run Chrome in the background. The CAPTCHA is captured from the page
-                    // and shown in DolatMan; the operator enters CAPTCHA and SMS OTP there.
-                    Headless = true,
+                    // Keep the real Chrome window visible so the operator can inspect the official portal,
+                    // CAPTCHA, OTP and any validation message while DolatMan controls the page.
+                    Headless = false,
                     ViewportSize = new ViewportSize { Width = 1440, Height = 1000 },
                     Args = new[]
                     {
