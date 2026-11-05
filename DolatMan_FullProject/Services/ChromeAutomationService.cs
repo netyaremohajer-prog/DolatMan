@@ -443,7 +443,9 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                     const actionable = target.closest('[role=tab],button,[role=button],a,label') || target;
                     actionable.click();
                     return true;
-                }""");
+                }
+                """
+                );
             }
             catch { clicked = false; }
             if (clicked) break;
