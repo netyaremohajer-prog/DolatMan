@@ -506,8 +506,19 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                             el.innerText, el.textContent, el.getAttribute('aria-label'),
                             el.getAttribute('title'), el.value
                           ].filter(Boolean).join(' '));
+                          const hasSelectedClass = className => {
+                            const tokens = (className || '').toString()
+                              .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+                              .toLowerCase().split(/\\s+/);
+                            return tokens.some(token => {
+                              if (/(^|[-_])(inactive|unselected|unchecked|not-active|not-selected)([-_]|$)/.test(token))
+                                return false;
+                              return /(^|[-_])(active|selected|checked)([-_]|$)/.test(token);
+                            });
+                          };
                           const selected = el => {
-                            const nodes = [el, el.parentElement, el.parentElement?.parentElement].filter(Boolean);
+                            const actionable = el.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li') || el;
+                            const nodes = [el, actionable, actionable.parentElement].filter(Boolean);
                             for (const node of nodes) {
                               const cls = node.className?.toString() || '';
                               if (node.getAttribute('aria-selected') === 'true' ||
@@ -515,7 +526,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                                   node.getAttribute('aria-pressed') === 'true' ||
                                   node.getAttribute('aria-current') === 'true' ||
                                   node.getAttribute('data-selected') === 'true' ||
-                                  /active|selected|checked|Mui-selected|ant-tabs-tab-active/i.test(cls))
+                                  hasSelectedClass(cls))
                                 return true;
                               const radio = node.matches?.('input[type=radio]') ? node :
                                 node.querySelector?.('input[type=radio]');
@@ -692,8 +703,19 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         return style.visibility !== 'hidden' && style.display !== 'none' &&
                           style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
                       };
+                      const hasSelectedClass = className => {
+                        const tokens = (className || '').toString()
+                          .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+                          .toLowerCase().split(/\\s+/);
+                        return tokens.some(token => {
+                          if (/(^|[-_])(inactive|unselected|unchecked|not-active|not-selected)([-_]|$)/.test(token))
+                            return false;
+                          return /(^|[-_])(active|selected|checked)([-_]|$)/.test(token);
+                        });
+                      };
                       const selectedState = el => {
-                        const nodes = [el, el.parentElement, el.parentElement?.parentElement].filter(Boolean);
+                        const actionable = el.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li') || el;
+                        const nodes = [el, actionable, actionable.parentElement].filter(Boolean);
                         for (const node of nodes) {
                           const cls = node.className?.toString() || '';
                           if (node.getAttribute('aria-selected') === 'true' ||
@@ -701,7 +723,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                               node.getAttribute('aria-pressed') === 'true' ||
                               node.getAttribute('aria-current') === 'true' ||
                               node.getAttribute('data-selected') === 'true' ||
-                              /active|selected|checked|Mui-selected|ant-tabs-tab-active/i.test(cls))
+                              hasSelectedClass(cls))
                             return true;
                           const radio = node.matches?.('input[type=radio]') ? node :
                             node.querySelector?.('input[type=radio]');
