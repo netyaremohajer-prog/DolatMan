@@ -7,10 +7,11 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>DolatMan</AssemblyName>
     <RootNamespace>DolatMan</RootNamespace>
+    <StartupObject>DolatMan.App</StartupObject>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <Platforms>AnyCPU;x64</Platforms>
 
-    <!-- Define WPF XAML inputs explicitly so App.xaml always generates the application entry point. -->
+    <!-- Explicitly define WPF XAML inputs to guarantee App.xaml generates Main. -->
     <EnableDefaultApplicationDefinition>false</EnableDefaultApplicationDefinition>
     <EnableDefaultPageItems>false</EnableDefaultPageItems>
   </PropertyGroup>
