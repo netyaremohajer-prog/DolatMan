@@ -509,7 +509,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                           const hasSelectedClass = className => {
                             const tokens = (className || '').toString()
                               .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-                              .toLowerCase().split(/\\s+/);
+                              .toLowerCase().split(/\s+/);
                             return tokens.some(token => {
                               if (/(^|[-_])(inactive|unselected|unchecked|not-active|not-selected)([-_]|$)/.test(token))
                                 return false;
@@ -706,7 +706,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                       const hasSelectedClass = className => {
                         const tokens = (className || '').toString()
                           .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
-                          .toLowerCase().split(/\\s+/);
+                          .toLowerCase().split(/\s+/);
                         return tokens.some(token => {
                           if (/(^|[-_])(inactive|unselected|unchecked|not-active|not-selected)([-_]|$)/.test(token))
                             return false;
