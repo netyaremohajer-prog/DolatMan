@@ -127,19 +127,35 @@ public partial class MainWindow : Window
         }
 
         var mapping = Math.Clamp(MappingCombo.SelectedIndex, 0, 2);
+        var isNewApplicant = _editingApplicant is null;
         var applicant = _editingApplicant ?? new Applicant();
-        var recordChanged = _editingApplicant is not null &&
-            (applicant.FullName != name || applicant.Mobile != mobile || applicant.UniqueId != uniqueId ||
-             applicant.FidaCode != fida || applicant.BirthDate != birthDate || applicant.MappingIndex != mapping);
+
+        // Keep a rollback snapshot so a failed disk write never leaves unsaved edits in memory.
+        var oldFullName = applicant.FullName;
+        var oldMobile = applicant.Mobile;
+        var oldUniqueId = applicant.UniqueId;
+        var oldFidaCode = applicant.FidaCode;
+        var oldBirthDate = applicant.BirthDate;
+        var oldMappingIndex = applicant.MappingIndex;
+        var oldQueueStatus = applicant.QueueStatus;
+
+        var recordChanged = !isNewApplicant &&
+            (oldFullName != name || oldMobile != mobile || oldUniqueId != uniqueId ||
+             oldFidaCode != fida || oldBirthDate != birthDate || oldMappingIndex != mapping);
+
         applicant.FullName = name;
         applicant.Mobile = mobile;
         applicant.UniqueId = uniqueId;
         applicant.FidaCode = fida;
         applicant.BirthDate = birthDate;
         applicant.MappingIndex = mapping;
-        if (recordChanged) applicant.QueueStatus = "آماده";
 
-        if (_editingApplicant is null) _applicants.Add(applicant);
+        // Editing a successfully processed record must never silently put it back in the queue.
+        // An operator must review the portal and explicitly use "Prepare again" if a retry is needed.
+        if (recordChanged && oldQueueStatus == "موفق")
+            applicant.QueueStatus = "نیازمند بررسی";
+
+        if (isNewApplicant) _applicants.Add(applicant);
 
         try
         {
@@ -155,8 +171,21 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            if (_editingApplicant is null) _applicants.Remove(applicant);
-            MessageBox.Show("ذخیره اطلاعات ناموفق بود:\n" + ex.Message,
+            if (isNewApplicant)
+            {
+                _applicants.Remove(applicant);
+            }
+            else
+            {
+                applicant.FullName = oldFullName;
+                applicant.Mobile = oldMobile;
+                applicant.UniqueId = oldUniqueId;
+                applicant.FidaCode = oldFidaCode;
+                applicant.BirthDate = oldBirthDate;
+                applicant.MappingIndex = oldMappingIndex;
+                applicant.QueueStatus = oldQueueStatus;
+            }
+            MessageBox.Show("ذخیره اطلاعات ناموفق بود؛ تغییرات به حالت قبلی برگشتند:\n" + ex.Message,
                 "خطا در ذخیره", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
@@ -186,18 +215,21 @@ public partial class MainWindow : Window
         if (MessageBox.Show($"پرونده «{selected.FullName}» حذف شود؟", "تأیید حذف",
             MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
 
+        var originalIndex = _applicants.IndexOf(selected);
         _applicants.Remove(selected);
-        ClearApplicantForm();
         try
         {
             _store.Save(_applicants);
+            ClearApplicantForm();
             RefreshCounts();
             AddActivity("یک پرونده از فهرست حذف شد.");
             SetStatus("پرونده انتخاب‌شده حذف شد.");
         }
         catch (Exception ex)
         {
-            MessageBox.Show("ذخیره تغییرات پس از حذف ناموفق بود:\n" + ex.Message,
+            _applicants.Insert(Math.Clamp(originalIndex, 0, _applicants.Count), selected);
+            ApplicantsGrid.SelectedItem = selected;
+            MessageBox.Show("ذخیره تغییرات پس از حذف ناموفق بود؛ پرونده به فهرست برگشت:\n" + ex.Message,
                 "خطا", MessageBoxButton.OK, MessageBoxImage.Error);
         }
     }
