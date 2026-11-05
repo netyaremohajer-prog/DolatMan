@@ -1,0 +1,12 @@
+<Application x:Class="DolatMan.App"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             StartupUri="MainWindow.xaml">
+    <Application.Resources>
+        <SolidColorBrush x:Key="Ink" Color="#1E2D43" />
+        <SolidColorBrush x:Key="Muted" Color="#78869B" />
+        <SolidColorBrush x:Key="Blue" Color="#2868B2" />
+        <SolidColorBrush x:Key="Line" Color="#E5ECF4" />
+        <SolidColorBrush x:Key="Surface" Color="#F4F7FB" />
+    </Application.Resources>
+</Application>

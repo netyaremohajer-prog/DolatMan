@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "dgSpecHash": "7AT0I3DSHSc=",
+  "success": true,
+  "projectFilePath": "C:\\Users\\RaboMarket\\Desktop\\DolatMan_FullProject\\DolatMan.csproj",
+  "expectedPackageFiles": [
+    "C:\\Users\\RaboMarket\\.nuget\\packages\\microsoft.bcl.asyncinterfaces\\6.0.0\\microsoft.bcl.asyncinterfaces.6.0.0.nupkg.sha512",
+    "C:\\Users\\RaboMarket\\.nuget\\packages\\microsoft.playwright\\1.64.1\\microsoft.playwright.1.64.1.nupkg.sha512",
+    "C:\\Users\\RaboMarket\\.nuget\\packages\\system.componentmodel.annotations\\5.0.0\\system.componentmodel.annotations.5.0.0.nupkg.sha512"
+  ],
+  "logs": []
+}
