@@ -90,6 +90,9 @@ Console.WriteLine("PASS: split OTP boxes auto-verify on the final digit without 
 await RunOtpNavigationRegressionAsync();
 Console.WriteLine("PASS: OTP entry stops touching digit locators after automatic navigation.");
 
+await RunIdentityFieldsAndCustomDateRegressionAsync();
+Console.WriteLine("PASS: sibling FIDA label and custom Jalali day/month/year dropdowns.");
+
 Console.WriteLine($"All {scenarios.Length} foreigners-selection regression tests passed.");
 
 static async Task RunClickableLookupRegressionAsync()
@@ -180,10 +183,15 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
             <output id="status"></output>
             <script>
               const boxes = [...document.querySelectorAll('.otp-digit')];
-              boxes.forEach(box => box.addEventListener('input', () => {
-                if (boxes.map(x => x.value).join('').length === 6)
+              const verifyOtp = () => {
+                if (boxes.every(x => x.value.length === 1) &&
+                    boxes.map(x => x.value).join('').length === 6)
                   document.body.dataset.autoVerified = 'true';
-              }));
+              };
+              boxes.forEach(box =>
+                ['input','keyup','change'].forEach(eventName =>
+                  box.addEventListener(eventName, verifyOtp)));
+
             </script>
           </body></html>
           """;
@@ -195,9 +203,7 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
     });
     var context = await browser.NewContextAsync();
     var page = await context.NewPageAsync();
-    await page.SetContentAsync(html);
-
-    var service = new ChromeAutomationService();
+    await page.SetContentAsync(html);    var service = new ChromeAutomationService();
     SetPrivateField(service, "_context", context);
     SetPrivateField(service, "_page", page);
 
@@ -301,6 +307,108 @@ static async Task RunOtpNavigationRegressionAsync()
             throw new InvalidOperationException($"Expected automatic navigation to /register, got '{page.Url}'.");
         if (await page.Locator("input[maxlength='1']").CountAsync() != 0)
             throw new InvalidOperationException("OTP fields should have been removed after navigation.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
+static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
+{
+    const string html = """
+        <!doctype html>
+        <html lang="fa" dir="rtl">
+        <body>
+          <div id="identity-kind">
+            <button id="foreign" class="active" aria-selected="true">اتباع</button>
+            <button id="iranian" aria-selected="false">ایرانی</button>
+          </div>
+          <section id="identity-form">
+            <div class="field">
+              <input id="unique" type="text" placeholder="شماره گذرنامه/فراگیر/شناسه یکتا">
+            </div>
+            <div class="field">
+              <span>کد فیدا</span>
+              <input id="fida" type="text" autocomplete="off">
+            </div>
+          </section>
+          <section id="birth-date">
+            <div id="day" class="custom-dropdown"><span>روز</span></div>
+            <div id="month" class="custom-dropdown"><span>ماه</span></div>
+            <div id="year" class="custom-dropdown"><span>سال تولد</span></div>
+          </section>
+          <script>
+            const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور',
+                                'مهر','آبان','آذر','دی','بهمن','اسفند'];
+            const values = {
+              day: Array.from({length:31}, (_,i) => String(i+1)),
+              month: monthNames,
+              year: ['1370','1371','1372']
+            };
+            function openOptions(name) {
+              document.querySelector('#date-options')?.remove();
+              const list = document.createElement('ul');
+              list.id = 'date-options';
+              for (const label of values[name]) {
+                const option = document.createElement('li');
+                option.setAttribute('role','option');
+                option.textContent = label;
+                option.addEventListener('click', () => {
+                  document.querySelector('#'+name+' span').textContent = label;
+                  list.remove();
+                });
+                list.appendChild(option);
+              }
+              document.body.appendChild(list);
+            }
+            document.querySelectorAll('.custom-dropdown').forEach(el =>
+              el.addEventListener('click', () => openOptions(el.id)));
+          </script>
+        </body>
+        </html>
+        """;
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+    var context = await browser.NewContextAsync();
+    await context.RouteAsync("**/*", route => route.FulfillAsync(new RouteFulfillOptions
+    {
+        Status = 200,
+        ContentType = "text/html; charset=utf-8",
+        Body = html
+    }));
+    var page = await context.NewPageAsync();
+    await page.GotoAsync(ChromeAutomationService.RegisterUrl);    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", page);
+
+    try
+    {
+        var applicant = new Applicant
+        {
+            FullName = "Regression Test",
+            UniqueId = "001234567890",
+            FidaCode = "F-00045678",
+            BirthDate = "15/02/1370",
+            MappingIndex = 0
+        };
+
+        await service.FillIdentityFormAsync(applicant, 0);
+
+        var uniqueValue = await page.Locator("#unique").InputValueAsync();
+        var fidaValue = await page.Locator("#fida").InputValueAsync();
+        if (uniqueValue != applicant.UniqueId || fidaValue != applicant.FidaCode)
+            throw new InvalidOperationException(
+                $"Identity fields mismatch. Unique='{uniqueValue}', FIDA='{fidaValue}'.");
+
+        var selectedDay = (await page.Locator("#day").InnerTextAsync()).Trim();
+        var selectedMonth = (await page.Locator("#month").InnerTextAsync()).Trim();
+        var selectedYear = (await page.Locator("#year").InnerTextAsync()).Trim();
+
+        if (selectedDay != "15" || selectedMonth != "اردیبهشت" || selectedYear != "1370")
+            throw new InvalidOperationException(
+                $"Jalali date mismatch. Got {selectedDay}/{selectedMonth}/{selectedYear}.");
     }
     finally
     {

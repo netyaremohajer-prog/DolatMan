@@ -593,7 +593,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                             if (!el || !el.getClientRects().length) return false;
                             const style = getComputedStyle(el);
                             return style.visibility !== 'hidden' && style.display !== 'none' &&
-                              style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                              style.opacity !== '0' && !el.closest('[aria-hidden=true]');
                           };
                           const describes = el => norm([
                             el.innerText, el.textContent, el.getAttribute('aria-label'),
@@ -823,7 +823,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         if (!el || !el.getClientRects().length) return false;
                         const style = getComputedStyle(el);
                         return style.visibility !== 'hidden' && style.display !== 'none' &&
-                          style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                          style.opacity !== '0' && !el.closest('[aria-hidden=true]');
                       };
                       for (const select of document.querySelectorAll('select')) {
                         if (isVisible(select) &&
@@ -862,7 +862,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         if (!el || !el.getClientRects().length) return false;
                         const style = getComputedStyle(el);
                         return style.visibility !== 'hidden' && style.display !== 'none' &&
-                          style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                          style.opacity !== '0' && !el.closest('[aria-hidden=true]');
                       };
                       const hasSelectedClass = className => {
                         const tokens = (className || '').toString()
@@ -936,11 +936,32 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         var used = new HashSet<int>();
         var first = await FindIdentityInputAsync(editable, used,
             new[] { "shenasaeiCode", "passportCode", "شناسه یکتا", "شناسه", "یکتا", "گذرنامه", "فراگیر", "passport", "unique" });
-        if (first.Locator is null) return false;
-        used.Add(first.Index);
-        var second = await FindIdentityInputAsync(editable, used,
-            new[] { "fidaCode", "کد فیدا", "فیدا", "fida" });
-        return second.Locator is not null;
+        if (first.Locator is not null)
+        {
+            used.Add(first.Index);
+            var second = await FindIdentityInputAsync(editable, used,
+                new[] { "fidaCode", "کد فیدا", "فیدا", "fida" });
+            if (second.Locator is not null)
+                return true;
+        }
+
+        // On the live SSO registration page the visible captions can be rendered as
+        // decorative sibling spans, not associated <label> elements. In that layout
+        // Playwright can see exactly two editable inputs but metadata matching may miss
+        // the FIDA caption. Accept that positional layout only when the page itself
+        // explicitly contains both foreigner identity captions and the «اتباع» context.
+        if (editable.Count != 2)
+            return false;
+
+        var body = NormalizeForMatch(await ReadBodyTextSafelyAsync());
+        var hasForeignerChoice = body.Contains(NormalizeForMatch("اتباع"), StringComparison.Ordinal);
+        var hasUniqueCaption =
+            body.Contains(NormalizeForMatch("گذرنامه"), StringComparison.Ordinal) ||
+            body.Contains(NormalizeForMatch("فراگیر"), StringComparison.Ordinal) ||
+            body.Contains(NormalizeForMatch("شناسه یکتا"), StringComparison.Ordinal);
+        var hasFidaCaption = body.Contains(NormalizeForMatch("کد فیدا"), StringComparison.Ordinal);
+
+        return hasForeignerChoice && hasUniqueCaption && hasFidaCaption;
     }
 
     private async Task<string> BuildRegistrationDiagnosticAsync(string reason)
@@ -1093,7 +1114,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         return el.getClientRects().length &&
                           style.display !== 'none' && style.visibility !== 'hidden' &&
                           style.opacity !== '0' && !el.matches(':disabled,[aria-disabled="true"]') &&
-                          !el.closest('[aria-hidden="true"]');
+                          !el.closest('[aria-hidden=true]');
                       }).map(el => {
                         const text = el.matches('input') ?
                           (el.value || el.getAttribute('aria-label') || el.title || '') :
@@ -1380,12 +1401,13 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 texts(el.labels ? [...el.labels] : []),
                 texts((el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id))),
                 el.closest('label')?.innerText,
-                el.previousElementSibling?.innerText
+                el.previousElementSibling?.innerText,
+                el.nextElementSibling?.innerText
               ].filter(Boolean).join(' ');
               const parentText = el.parentElement?.innerText || '';
               const grandText = el.parentElement?.parentElement?.innerText || '';
-              const nearby = [parentText.length <= 140 ? parentText : '',
-                              grandText.length <= 90 ? grandText : ''].filter(Boolean).join(' ');
+              const nearby = [parentText.length <= 220 ? parentText : '',
+                              grandText.length <= 160 ? grandText : ''].filter(Boolean).join(' ');
               return direct + '\u001f' + nearby;
             }
             """);
@@ -1502,58 +1524,180 @@ public sealed class ChromeAutomationService : IAsyncDisposable
     private async Task<string> FillBirthDateAsync(string dateText)
     {
         if (!TryParseDate(dateText, out var day, out var month, out var year))
-            return "قالب تاریخ تولد مشخص نیست؛ تاریخ را خودتان در Chrome وارد کنید (روز/ماه/سال).";
+            return "تاریخ تولد خالی یا با قالب نامعتبر است؛ آن را به شکل روز/ماه/سال در Chrome دستی تکمیل کنید. فرم تا تکمیل تاریخ ارسال نمی‌شود.";
 
-        var controls = _page!.Locator("input:visible, select:visible");
-        var count = await controls.CountAsync();
-        ILocator? dayControl = null, monthControl = null, yearControl = null;
-        var selects = new List<(ILocator Locator, int OptionCount)>();
+        var dayControl = await FindDateControlAsync("day");
+        var monthControl = await FindDateControlAsync("month");
+        var yearControl = await FindDateControlAsync("year");
 
-        for (var i = 0; i < count; i++)
+        if (dayControl.Locator is null || monthControl.Locator is null || yearControl.Locator is null)
+            throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync(
+                "سه فهرست کشویی روز، ماه و سال تولد به‌طور مطمئن شناسایی نشدند؛ فرم ثبت نشد."));
+
+        var monthName = GetPersianMonthName(month);
+        var dayOk = await SelectDateControlAsync(dayControl.Frame!, dayControl.Locator, day, day);
+        var monthOk = await SelectDateControlAsync(monthControl.Frame!, monthControl.Locator, month, monthName);
+        var yearOk = await SelectDateControlAsync(yearControl.Frame!, yearControl.Locator, year, year);
+
+        if (!dayOk || !monthOk || !yearOk)
         {
-            var item = controls.Nth(i);
-            if (!await item.IsVisibleAsync()) continue;
-            var desc = await DescribeDateControlAsync(item);
-            if (HasAny(desc, "روز", "day")) dayControl = item;
-            else if (HasAny(desc, "ماه", "month")) monthControl = item;
-            else if (HasAny(desc, "سال", "year")) yearControl = item;
-
-            var tag = await item.EvaluateAsync<string>("el => el.tagName.toLowerCase()");
-            if (tag == "select")
-                selects.Add((item, await item.Locator("option").CountAsync()));
-            if (tag == "input")
+            var failed = string.Join("، ", new[]
             {
-                var type = (await item.GetAttributeAsync("type") ?? "text").ToLowerInvariant();
-                if (type == "date")
-                {
-                    var iso = $"{year}-{month.PadLeft(2, '0')}-{day.PadLeft(2, '0')}";
-                    await item.FillAsync(iso);
-                    return "تاریخ تولد در کادر تاریخ وارد شد.";
-                }
+                dayOk ? null : "روز",
+                monthOk ? null : "ماه",
+                yearOk ? null : "سال"
+            }.Where(x => x is not null));
+            throw new InvalidOperationException(
+                $"انتخاب تاریخ تولد در فهرست کشویی «{failed}» تأیید نشد؛ برای جلوگیری از ثبت تاریخ اشتباه، فرم ارسال نشد.");
+        }
+
+        return $"تاریخ تولد {day}/{month}/{year} در فهرست‌های کشویی انتخاب و کنترل شد.";
+    }
+
+    private async Task<(IFrame? Frame, ILocator? Locator)> FindDateControlAsync(string field)
+    {
+        foreach (var frame in _page!.Frames)
+        {
+            try
+            {
+                var found = await frame.EvaluateAsync<bool>("(field) => {"
+                    + "const aliases={day:['روز','day'],month:['ماه','month'],year:['سال','year']};"
+                    + "const other={day:['ماه','سال'],month:['روز','سال'],year:['روز','ماه']};"
+                    + "const norm=s=>(s||'').normalize('NFKC').replace(/[\\s\\u200c\\u200f\\u0640]/g,'').replace(/[ي]/g,'ی').replace(/[ك]/g,'ک').toLowerCase();"
+                    + "const visible=el=>{if(!el||!el.getClientRects().length)return false;const st=getComputedStyle(el);return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&!el.closest('[aria-hidden=true]');};"
+                    + "const selector='input,select,button,[role=combobox],[role=button],[aria-haspopup],[aria-expanded],[tabindex],[class*=select],[class*=Select],[class*=dropdown],[class*=Dropdown],div,span';"
+                    + "const candidates=[...document.querySelectorAll(selector)].filter(visible).map(el=>{"
+                    + "const own=(el.innerText||el.textContent||'').trim();"
+                    + "const attrs=[el.getAttribute('placeholder'),el.getAttribute('name'),el.id,el.getAttribute('aria-label'),el.getAttribute('title'),el.getAttribute('data-testid'),el.getAttribute('class')].filter(Boolean).join(' ');"
+                    + "const siblings=[el.previousElementSibling?.innerText,el.nextElementSibling?.innerText].filter(Boolean).join(' ');"
+                    + "const direct=norm(attrs+' '+own);const near=norm(siblings);"
+                    + "let score=0;"
+                    + "if(aliases[field].some(a=>norm(attrs).includes(norm(a))))score+=140;"
+                    + "if(aliases[field].some(a=>norm(own)===norm(a)))score+=130;"
+                    + "else if(aliases[field].some(a=>norm(own).includes(norm(a)))&&norm(own).length<24)score+=90;"
+                    + "if(aliases[field].some(a=>near.includes(norm(a))))score+=35;"
+                    + "if(other[field].some(a=>norm(own).includes(norm(a))))score-=100;"
+                    + "if(norm(own).length>45)score-=50;"
+                    + "if(el.matches('input,select,button,[role=combobox],[role=button],[aria-haspopup],[tabindex]'))score+=8;"
+                    + "return {el,own,score};"
+                    + "}).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.own.length-b.own.length);"
+                    + "if(!candidates.length)return false;"
+                    + "const best=candidates[0];best.el.setAttribute('data-dolatman-date-control',field);return true;"
+                    + "}", field);
+
+                if (found)
+                    return (frame, frame.Locator($"[data-dolatman-date-control='{field}']").First);
+            }
+            catch
+            {
+                // Continue through frames; the caller reports which date control is missing.
             }
         }
 
-        // If this page uses native select elements without labels, use option-list lengths
-        // as hints; never guess if the page structure is ambiguous.
-        if (dayControl is null || monthControl is null || yearControl is null)
+        return (null, null);
+    }
+
+    private static string GetPersianMonthName(string month)
+    {
+        var names = new[]
         {
-            var daySelect = selects.FirstOrDefault(x => x.OptionCount is >= 27 and <= 33).Locator;
-            var monthSelect = selects.FirstOrDefault(x => x.OptionCount is >= 10 and <= 13).Locator;
-            var yearSelect = selects.FirstOrDefault(x => x.OptionCount > 33).Locator;
-            dayControl ??= daySelect;
-            monthControl ??= monthSelect;
-            yearControl ??= yearSelect;
+            "", "فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+            "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"
+        };
+        if (!int.TryParse(NormalizeNumber(month), out var number) || number is < 1 or > 12)
+            throw new InvalidOperationException("شماره ماه تولد معتبر نیست.");
+        return names[number];
+    }
+
+    private async Task<bool> SelectDateControlAsync(IFrame frame, ILocator control, string value, string displayLabel)
+    {
+        var tag = await control.EvaluateAsync<string>("el => el.tagName.toLowerCase()");
+        if (tag == "select")
+        {
+            var options = control.Locator("option");
+            var count = await options.CountAsync();
+            for (var i = 0; i < count; i++)
+            {
+                var option = options.Nth(i);
+                var label = (await option.InnerTextAsync()).Trim();
+                var optionValue = await option.GetAttributeAsync("value") ?? "";
+                if (NormalizeForMatch(label) == NormalizeForMatch(displayLabel) ||
+                    NormalizeNumber(label) == NormalizeNumber(value) ||
+                    NormalizeNumber(optionValue) == NormalizeNumber(value))
+                {
+                    if (!string.IsNullOrEmpty(optionValue))
+                        await control.SelectOptionAsync(optionValue, new LocatorSelectOptionOptions { Timeout = 5000 });
+                    else
+                        await control.SelectOptionAsync(new SelectOptionValue { Label = label });
+                    return true;
+                }
+            }
+            return false;
         }
 
-        if (dayControl is null || monthControl is null || yearControl is null)
-            return "شناسه‌ها وارد شدند؛ کنترل‌های تاریخ قابل شناسایی خودکار نبودند و تاریخ را خودتان در Chrome تکمیل کنید.";
+        try
+        {
+            await control.ClickAsync(new LocatorClickOptions { Timeout = 5000 });
+        }
+        catch (PlaywrightException)
+        {
+            return false;
+        }
 
-        var dateOk = await SetControlValueAsync(dayControl, day) &&
-                     await SetControlValueAsync(monthControl, month) &&
-                     await SetControlValueAsync(yearControl, year);
-        return dateOk
-            ? "تاریخ تولد نیز وارد شد."
-            : "شناسه‌ها وارد شدند، اما یکی از گزینه‌های تاریخ پیدا نشد؛ تاریخ را دستی بررسی و تکمیل کنید.";
+        var clicked = await ClickVisibleDateOptionAsync(frame, value, displayLabel);
+        if (!clicked)
+            return false;
+
+        await Task.Delay(120);
+        string actual;
+        try { actual = await control.InnerTextAsync(); }
+        catch { actual = await ReadEditableValueAsync(control); }
+
+        var normalizedActual = NormalizeForMatch(actual);
+        var normalizedLabel = NormalizeForMatch(displayLabel);
+        if (normalizedActual.Contains(normalizedLabel, StringComparison.Ordinal))
+            return true;
+
+        var normalizedValue = NormalizeNumber(actual);
+        return normalizedValue.Contains(NormalizeNumber(value), StringComparison.Ordinal);
+    }
+
+    private static async Task<bool> ClickVisibleDateOptionAsync(IFrame frame, string value, string displayLabel)
+    {
+        var args = new { Value = value, Label = displayLabel };
+        var found = await frame.EvaluateAsync<bool>("(args) => {"
+            + "const norm=s=>(s||'').normalize('NFKC').replace(/[\\s\\u200c\\u200f\\u0640]/g,'').replace(/[ي]/g,'ی').replace(/[ك]/g,'ک');"
+            + "const ascii=s=>(s||'').replace(/[۰-۹٠-٩]/g,ch=>{const a='۰۱۲۳۴۵۶۷۸۹',b='٠١٢٣٤٥٦٧٨٩';let i=a.indexOf(ch);if(i>=0)return String(i);i=b.indexOf(ch);return i>=0?String(i):ch;});"
+            + "const num=s=>ascii(s).replace(/[\\s,٬]/g,'').replace(/^0+(?=\\d)/,'');"
+            + "const visible=el=>{if(!el||!el.getClientRects().length)return false;const st=getComputedStyle(el);return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&!el.closest('[aria-hidden=true]');};"
+            + "document.querySelectorAll('[data-dolatman-date-option]').forEach(el=>el.removeAttribute('data-dolatman-date-option'));"
+            + "const wantedLabel=norm(args.Label),wantedNumber=num(args.Value);"
+            + "const selector='option,[role=option],[role=menuitem],li,button,[role=button],[tabindex],div,span';"
+            + "const matches=[...document.querySelectorAll(selector)].filter(visible).map(el=>{"
+            + "const text=(el.innerText||el.textContent||'').trim();"
+            + "const attrs=[el.getAttribute('value'),el.getAttribute('data-value'),el.getAttribute('aria-label'),el.getAttribute('title')].filter(Boolean).join(' ');"
+            + "return {el,text,match:norm(text)===wantedLabel||num(text)===wantedNumber||norm(attrs)===wantedLabel||num(attrs)===wantedNumber};"
+            + "}).filter(x=>x.match).sort((a,b)=>a.text.length-b.text.length);"
+            + "if(!matches.length)return false;"
+            + "let target=matches[0].el;"
+            + "let actionable=target.closest('[role=option],[role=menuitem],li,button,[role=button],[tabindex]');"
+            + "if(!actionable){for(let node=target,depth=0;node&&depth<5;node=node.parentElement,depth++){const st=getComputedStyle(node);if(node.onclick||st.cursor==='pointer'||/option|item|menu|dropdown/i.test(node.className?.toString()||'')){actionable=node;break;}}}"
+            + "actionable ||= target;if(!visible(actionable))return false;actionable.setAttribute('data-dolatman-date-option','true');return true;"
+            + "}", args);
+
+        if (!found)
+            return false;
+
+        var option = frame.Locator("[data-dolatman-date-option='true']").First;
+        try
+        {
+            await option.ClickAsync(new LocatorClickOptions { Timeout = 5000 });
+            return true;
+        }
+        catch (PlaywrightException)
+        {
+            return false;
+        }
     }
 
     private static async Task<bool> SetControlValueAsync(ILocator control, string value)
