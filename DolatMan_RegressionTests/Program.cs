@@ -196,9 +196,20 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
         if (buttons != 0)
             throw new InvalidOperationException("The test fixture must not contain a confirm button.");
 
-        var entered = singleInput
-            ? await page.Locator("#otp").InputValueAsync()
-            : string.Concat(await page.Locator(".otp-digit").AllInputValuesAsync());
+        string entered;
+        if (singleInput)
+        {
+            entered = await page.Locator("#otp").InputValueAsync();
+        }
+        else
+        {
+            var boxes = page.Locator(".otp-digit");
+            var count = await boxes.CountAsync();
+            var digits = new System.Text.StringBuilder();
+            for (var i = 0; i < count; i++)
+                digits.Append(await boxes.Nth(i).InputValueAsync());
+            entered = digits.ToString();
+        }
 
         if (entered != "123456")
             throw new InvalidOperationException($"OTP value mismatch: '{entered}'.");
