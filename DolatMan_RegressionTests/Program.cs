@@ -56,8 +56,15 @@ foreach (var scenario in scenarios)
 }
 
 
+
 await RunClickableLookupRegressionAsync();
 Console.WriteLine("PASS: stable clickable lookup during DOM re-render.");
+
+await RunOtpAutoVerifyRegressionAsync(singleInput: true);
+Console.WriteLine("PASS: single OTP input auto-verifies without a confirm button.");
+
+await RunOtpAutoVerifyRegressionAsync(singleInput: false);
+Console.WriteLine("PASS: split OTP boxes auto-verify on the final digit without a confirm button.");
 
 Console.WriteLine($"All {scenarios.Length} foreigners-selection regression tests passed.");
 
@@ -117,6 +124,101 @@ static async Task RunClickableLookupRegressionAsync()
     }
 }
 
+
+static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
+{
+    var html = singleInput
+        ? """
+          <!doctype html><html lang="fa" dir="rtl"><body>
+            <label for="otp">کد پیامکی</label>
+            <input id="otp" name="otp" type="text" autocomplete="one-time-code"
+                   placeholder="کد پیامکی" maxlength="6">
+            <output id="status"></output>
+            <script>
+              const otp = document.getElementById('otp');
+              otp.addEventListener('input', () => {
+                if (otp.value.length === 6)
+                  document.body.dataset.autoVerified = 'true';
+              });
+            </script>
+          </body></html>
+          """
+        : """
+          <!doctype html><html lang="fa" dir="rtl"><body>
+            <section id="otp-boxes">
+              <input class="otp-digit" maxlength="1" inputmode="numeric">
+              <input class="otp-digit" maxlength="1" inputmode="numeric">
+              <input class="otp-digit" maxlength="1" inputmode="numeric">
+              <input class="otp-digit" maxlength="1" inputmode="numeric">
+              <input class="otp-digit" maxlength="1" inputmode="numeric">
+              <input class="otp-digit" maxlength="1" inputmode="numeric">
+            </section>
+            <output id="status"></output>
+            <script>
+              const boxes = [...document.querySelectorAll('.otp-digit')];
+              boxes.forEach(box => box.addEventListener('input', () => {
+                if (boxes.map(x => x.value).join('').length === 6)
+                  document.body.dataset.autoVerified = 'true';
+              }));
+            </script>
+          </body></html>
+          """;
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+    {
+        Headless = true
+    });
+    var context = await browser.NewContextAsync();
+    var page = await context.NewPageAsync();
+    await page.SetContentAsync(html);
+
+    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", page);
+
+    try
+    {
+        var method = typeof(ChromeAutomationService).GetMethod(
+            "EnterOtpForAutomaticVerificationAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Automatic OTP entry method was not found.");
+        var task = method.Invoke(service, new object[] { "123456" }) as Task
+            ?? throw new InvalidOperationException("Automatic OTP method did not return a Task.");
+        await task;
+
+        var autoVerified = await page.EvaluateAsync<bool>(
+            "() => document.body.dataset.autoVerified === 'true'");
+        if (!autoVerified)
+            throw new InvalidOperationException("The last OTP digit did not trigger automatic verification.");
+
+        var buttons = await page.Locator("button,input[type=submit]").CountAsync();
+        if (buttons != 0)
+            throw new InvalidOperationException("The test fixture must not contain a confirm button.");
+
+        string entered;
+        if (singleInput)
+        {
+            entered = await page.Locator("#otp").InputValueAsync();
+        }
+        else
+        {
+            var boxes = page.Locator(".otp-digit");
+            var count = await boxes.CountAsync();
+            var digits = new System.Text.StringBuilder();
+            for (var i = 0; i < count; i++)
+                digits.Append(await boxes.Nth(i).InputValueAsync());
+            entered = digits.ToString();
+        }
+
+        if (entered != "123456")
+            throw new InvalidOperationException($"OTP value mismatch: '{entered}'.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
 
 static async Task RunScenarioAsync(Scenario scenario)
 {
