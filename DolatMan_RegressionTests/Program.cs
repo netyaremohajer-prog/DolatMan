@@ -8,7 +8,9 @@ var scenarios = new[]
     new Scenario(
         "tab with inactive CSS class",
         """
-        <div class="tabs">
+        <!-- The shared tab container can have an active class because ایرانی is selected.
+             Its class must never be used as the selected state for the اتباع child tab. -->
+        <div class="tabs tabs-active">
           <button id="foreigners" class="tab tab-inactive" aria-selected="false">اتباع</button>
           <button id="iranian" class="tab tab-active" aria-selected="true">ایرانی</button>
         </div>
