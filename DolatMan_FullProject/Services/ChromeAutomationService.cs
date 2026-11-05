@@ -525,7 +525,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                  normalized.Contains(NormalizeForMatch("گذرنامه"), StringComparison.Ordinal) ||
                  normalized.Contains(NormalizeForMatch("فراگیر"), StringComparison.Ordinal));
 
-            if ((isRegistrationRoute && hasRegistrationShell) ||
+            if (hasRegistrationShell ||
                 (!isLoginRoute && hasAuthenticatedIdentityForm))
             {
                 _page = candidate;
@@ -559,8 +559,14 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                                       ContainsAny(body, "اشتباه", "صحیح نیست", "نامعتبر", "نادرست");
             if (securityCodeRejected || oneTimeCodeRejected)
                 throw new InvalidOperationException("سامانه کد امنیتی یا کد پیامکی را نپذیرفت. کد و پیام خطا را بررسی و پرونده را دوباره اجرا کنید.");
-            if (body.Contains("کد فیدا", StringComparison.OrdinalIgnoreCase) &&
-                (body.Contains("شناسه", StringComparison.OrdinalIgnoreCase) || body.Contains("اتباع", StringComparison.OrdinalIgnoreCase)))
+            var normalizedBody = NormalizeForMatch(body);
+            var hasRegistrationShell =
+                normalizedBody.Contains(NormalizeForMatch("اتباع"), StringComparison.Ordinal) &&
+                normalizedBody.Contains(NormalizeForMatch("ایرانی"), StringComparison.Ordinal) &&
+                normalizedBody.Contains(NormalizeForMatch("تولد"), StringComparison.Ordinal) &&
+                (normalizedBody.Contains(NormalizeForMatch("کد فیدا"), StringComparison.Ordinal) ||
+                 normalizedBody.Contains(NormalizeForMatch("کدملی"), StringComparison.Ordinal));
+            if (hasRegistrationShell)
                 return;
 
             await Task.Delay(700, cancellationToken);
