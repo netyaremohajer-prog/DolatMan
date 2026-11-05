@@ -8,7 +8,9 @@ var scenarios = new[]
     new Scenario(
         "tab with inactive CSS class",
         """
-        <div class="tabs">
+        <!-- The shared tab container can have an active class because ایرانی is selected.
+             Its class must never be used as the selected state for the اتباع child tab. -->
+        <div class="tabs tabs-active">
           <button id="foreigners" class="tab tab-inactive" aria-selected="false">اتباع</button>
           <button id="iranian" class="tab tab-active" aria-selected="true">ایرانی</button>
         </div>
@@ -53,7 +55,68 @@ foreach (var scenario in scenarios)
     Console.WriteLine($"PASS: {scenario.Name}");
 }
 
+
+await RunClickableLookupRegressionAsync();
+Console.WriteLine("PASS: stable clickable lookup during DOM re-render.");
+
 Console.WriteLine($"All {scenarios.Length} foreigners-selection regression tests passed.");
+
+static async Task RunClickableLookupRegressionAsync()
+{
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+    {
+        Headless = true
+    });
+    var context = await browser.NewContextAsync();
+    var page = await context.NewPageAsync();
+    await page.SetContentAsync("""
+        <!doctype html>
+        <html lang="fa">
+        <body>
+          <button id="other">گزینه دیگر</button>
+          <button id="send">ارسال کد</button>
+          <output id="result"></output>
+          <script>
+            document.getElementById('send').addEventListener('click', () => {
+              document.getElementById('result').textContent = 'clicked';
+            });
+            // Simulate the portal replacing an unrelated button while the helper scans.
+            setTimeout(() => {
+              const old = document.getElementById('other');
+              if (old) old.replaceWith(Object.assign(document.createElement('button'), {
+                id: 'other-new', textContent: 'گزینه جایگزین'
+              }));
+            }, 0);
+          </script>
+        </body>
+        </html>
+        """);
+
+    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", page);
+    try
+    {
+        var method = typeof(ChromeAutomationService).GetMethod(
+            "FindClickableByTextAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("FindClickableByTextAsync was not found.");
+        var task = method.Invoke(service, new object[] { new[] { "ارسال کد" } }) as Task<ILocator?>
+            ?? throw new InvalidOperationException("Clickable lookup did not return a Task.");
+        var button = await task
+            ?? throw new InvalidOperationException("The matching button was not found.");
+        await button.ClickAsync();
+        var clicked = await page.Locator("#result").InnerTextAsync();
+        if (clicked != "clicked")
+            throw new InvalidOperationException("The returned locator did not click the expected button.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
 
 static async Task RunScenarioAsync(Scenario scenario)
 {
