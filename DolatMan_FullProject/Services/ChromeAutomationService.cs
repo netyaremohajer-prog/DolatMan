@@ -1524,8 +1524,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
     private async Task<string> FillBirthDateAsync(string dateText)
     {
         if (!TryParseDate(dateText, out var day, out var month, out var year))
-            throw new InvalidOperationException(
-                "تاریخ تولد باید به شکل روز/ماه/سال و بر اساس تقویم ثبت‌شده در پرونده باشد؛ تاریخ وارد نشد.");
+            return "تاریخ تولد خالی یا با قالب نامعتبر است؛ آن را به شکل روز/ماه/سال در Chrome دستی تکمیل کنید. فرم تا تکمیل تاریخ ارسال نمی‌شود.";
 
         var dayControl = await FindDateControlAsync("day");
         var monthControl = await FindDateControlAsync("month");
