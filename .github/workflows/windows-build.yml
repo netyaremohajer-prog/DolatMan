@@ -40,6 +40,19 @@ jobs:
       - name: Build WPF app
         run: dotnet build DolatMan_FullProject/DolatMan.csproj -c Release --no-restore
 
+      - name: Restore regression tests
+        run: dotnet restore DolatMan_RegressionTests/DolatMan.RegressionTests.csproj
+
+      - name: Build regression tests
+        run: dotnet build DolatMan_RegressionTests/DolatMan.RegressionTests.csproj -c Release --no-restore
+
+      - name: Install Playwright Chromium
+        shell: pwsh
+        run: pwsh DolatMan_RegressionTests/bin/Release/net10.0-windows/playwright.ps1 install chromium
+
+      - name: Run foreigners-selection regression tests
+        run: dotnet run --project DolatMan_RegressionTests/DolatMan.RegressionTests.csproj -c Release --no-build
+
       - name: Publish self-contained Windows x64
         run: dotnet publish DolatMan_FullProject/DolatMan.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false
 
