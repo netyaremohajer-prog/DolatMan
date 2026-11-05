@@ -444,7 +444,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                     actionable.click();
                     return true;
                 }
-                """);
+                """
+                );
             }
             catch { clicked = false; }
             if (clicked) break;
