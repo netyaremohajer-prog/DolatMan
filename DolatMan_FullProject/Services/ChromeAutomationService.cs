@@ -428,7 +428,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                clicked = await frame.EvaluateAsync<bool>("""() => {
+                clicked = await frame.EvaluateAsync<bool>("""
+                    () => {
                     const norm = s => (s || '').normalize('NFKC')
                       .replace(/[\s\u200c\u200f\u0640]/g, '')
                       .replace(/[ي]/g, 'ی').replace(/[ك]/g, 'ک');
