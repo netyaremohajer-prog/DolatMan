@@ -1,0 +1,15 @@
+## .NET / Visual Studio build output
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.suo
+*.cache
+
+## Local runtime data and browser profile
+DolatManData/
+ChromeProfile/
+*.tmp
+
+## Publish output
+publish/
