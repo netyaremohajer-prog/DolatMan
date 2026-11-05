@@ -490,7 +490,6 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             var path = uri.AbsolutePath;
             var isDashboard = path.Contains("/dashboard", StringComparison.OrdinalIgnoreCase);
             var isAccount = path.Contains("/account", StringComparison.OrdinalIgnoreCase);
-            var isRegistrationRoute = path.Contains("/register", StringComparison.OrdinalIgnoreCase);
             var isLoginRoute = path.Contains("/login", StringComparison.OrdinalIgnoreCase);
 
             if (isDashboard || isAccount)
