@@ -25,9 +25,9 @@ if not exist "MainWindow.xaml.cs" (
 )
 
 echo.
-echo [1/3] Cleaning previous build output...
-dotnet clean DolatMan.csproj -c Release
-if errorlevel 1 goto :error
+echo [1/3] Removing old generated files...
+if exist "bin" rmdir /s /q "bin"
+if exist "obj" rmdir /s /q "obj"
 
 echo.
 echo [2/3] Restoring NuGet packages...
