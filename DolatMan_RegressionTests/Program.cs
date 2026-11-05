@@ -46,7 +46,28 @@ var scenarios = new[]
           <label for="iranian">ایرانی</label>
         </div>
         """,
-        "() => document.querySelector('#foreign').checked === true")
+        "() => document.querySelector('#foreign').checked === true"),
+    new Scenario(
+        "segmented DIV tab without button or ARIA roles",
+        """
+        <div id="segmented-control" class="segmented-control">
+          <div id="foreign-tab" class="segment-item">
+            <span class="globe-icon">◉</span><span>اتباع</span>
+          </div>
+          <div id="iranian-tab" class="segment-item active">
+            <span class="flag-icon">⚑</span><span>ایرانی</span>
+          </div>
+        </div>
+        <script>
+          document.getElementById('segmented-control').addEventListener('click', event => {
+            const item = event.target.closest('.segment-item');
+            if (!item) return;
+            document.querySelectorAll('.segment-item').forEach(x => x.classList.remove('active'));
+            item.classList.add('active');
+          });
+        </script>
+        """,
+        "() => document.querySelector('#foreign-tab').classList.contains('active')")
 };
 
 foreach (var scenario in scenarios)
@@ -65,6 +86,9 @@ Console.WriteLine("PASS: single OTP input auto-verifies without a confirm button
 
 await RunOtpAutoVerifyRegressionAsync(singleInput: false);
 Console.WriteLine("PASS: split OTP boxes auto-verify on the final digit without a confirm button.");
+
+await RunOtpNavigationRegressionAsync();
+Console.WriteLine("PASS: OTP entry stops touching digit locators after automatic navigation.");
 
 Console.WriteLine($"All {scenarios.Length} foreigners-selection regression tests passed.");
 
@@ -213,6 +237,70 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
 
         if (entered != "123456")
             throw new InvalidOperationException($"OTP value mismatch: '{entered}'.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
+static async Task RunOtpNavigationRegressionAsync()
+{
+    const string html = """
+        <!doctype html><html lang="fa" dir="rtl"><body>
+          <section id="otp-boxes">
+            <input class="otp-digit" maxlength="1" inputmode="numeric">
+            <input class="otp-digit" maxlength="1" inputmode="numeric">
+            <input class="otp-digit" maxlength="1" inputmode="numeric">
+            <input class="otp-digit" maxlength="1" inputmode="numeric">
+            <input class="otp-digit" maxlength="1" inputmode="numeric">
+            <input class="otp-digit" maxlength="1" inputmode="numeric">
+          </section>
+          <script>
+            const boxes = [...document.querySelectorAll('.otp-digit')];
+            boxes.forEach(box => box.addEventListener('input', () => {
+              if (boxes.map(x => x.value).join('').length === 6) {
+                document.querySelector('#otp-boxes').remove();
+                history.pushState({}, '', '/register');
+              }
+            }));
+          </script>
+        </body></html>
+        """;
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
+    {
+        Headless = true
+    });
+    var context = await browser.NewContextAsync();
+    await context.RouteAsync("https://sso.my.gov.ir/login", route => route.FulfillAsync(new RouteFulfillOptions
+    {
+        Status = 200,
+        ContentType = "text/html; charset=utf-8",
+        Body = html
+    }));
+    var page = await context.NewPageAsync();
+    await page.GotoAsync("https://sso.my.gov.ir/login");
+
+    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", page);
+
+    try
+    {
+        var method = typeof(ChromeAutomationService).GetMethod(
+            "EnterOtpForAutomaticVerificationAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Automatic OTP entry method was not found.");
+        var task = method.Invoke(service, new object[] { "123456" }) as Task
+            ?? throw new InvalidOperationException("Automatic OTP method did not return a Task.");
+        await task;
+
+        if (!page.Url.EndsWith("/register", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Expected automatic navigation to /register, got '{page.Url}'.");
+        if (await page.Locator("input[maxlength='1']").CountAsync() != 0)
+            throw new InvalidOperationException("OTP fields should have been removed after navigation.");
     }
     finally
     {
