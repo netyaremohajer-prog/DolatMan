@@ -1,0 +1,1 @@
+Temporary trigger for the final clean Windows WPF build test.
