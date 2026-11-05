@@ -256,7 +256,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             throw new OperationCanceledException("ورود کد پیامکی لغو شد.", cancellationToken);
         await EnterOtpForAutomaticVerificationAsync(otp.Trim());
         progress.Report("کد پیامکی در فرم سامانه وارد شد؛ در حال بررسی نتیجه ورود...");
-        await WaitForAuthenticatedPortalAsync(TimeSpan.FromMinutes(5), cancellationToken);
+        await WaitForAuthenticatedPortalAsync(TimeSpan.FromSeconds(90), cancellationToken);
 
         cancellationToken.ThrowIfCancellationRequested();
         progress.Report("ورود شناسایی شد؛ باز کردن فرم ثبت اطلاعات اتباع...");
@@ -343,16 +343,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         if (code.Length < 4 || code.Length > 8)
             throw new InvalidOperationException("کد پیامکی باید بین ۴ تا ۸ رقم باشد.");
 
-        bool HasReachedAuthenticatedPage()
-        {
-            if (!Uri.TryCreate(_page?.Url, UriKind.Absolute, out var current) ||
-                !current.Host.EndsWith("my.gov.ir", StringComparison.OrdinalIgnoreCase))
-                return false;
-
-            return current.AbsolutePath.Contains("/register", StringComparison.OrdinalIgnoreCase) ||
-                   current.AbsolutePath.Contains("/dashboard", StringComparison.OrdinalIgnoreCase) ||
-                   current.AbsolutePath.Contains("/account", StringComparison.OrdinalIgnoreCase);
-        }
+        async Task<bool> HasReachedAuthenticatedPageAsync()
+            => await TryAdoptAuthenticatedPortalPageAsync();
 
         // Do not use a locator that can silently change from OTP boxes to unrelated
         // one-character controls after the portal navigates. The official portal validates
@@ -364,13 +356,13 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         {
             for (var i = 0; i < code.Length; i++)
             {
-                if (HasReachedAuthenticatedPage())
+                if (await HasReachedAuthenticatedPageAsync())
                     return;
 
                 var currentCount = await splitBoxes.CountAsync();
                 if (currentCount <= i)
                 {
-                    if (HasReachedAuthenticatedPage())
+                    if (await HasReachedAuthenticatedPageAsync())
                         return;
 
                     throw new InvalidOperationException(
@@ -383,7 +375,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 {
                     if (!await box.IsVisibleAsync())
                     {
-                        if (HasReachedAuthenticatedPage())
+                        if (await HasReachedAuthenticatedPageAsync())
                             return;
 
                         throw new InvalidOperationException($"کادر شماره {i + 1} کد پیامکی قابل مشاهده نیست.");
@@ -397,7 +389,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 }
                 catch (PlaywrightException ex)
                 {
-                    if (HasReachedAuthenticatedPage())
+                    if (await HasReachedAuthenticatedPageAsync())
                         return;
 
                     throw new InvalidOperationException(
@@ -406,11 +398,11 @@ public sealed class ChromeAutomationService : IAsyncDisposable
 
                 // If the last digit triggered automatic verification and navigation,
                 // stop touching the old OTP locators immediately.
-                if (HasReachedAuthenticatedPage())
+                if (await HasReachedAuthenticatedPageAsync())
                     return;
             }
 
-            if (HasReachedAuthenticatedPage())
+            if (await HasReachedAuthenticatedPageAsync())
                 return;
 
             var entered = new System.Text.StringBuilder();
@@ -418,7 +410,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             {
                 for (var i = 0; i < code.Length; i++)
                 {
-                    if (HasReachedAuthenticatedPage())
+                    if (await HasReachedAuthenticatedPageAsync())
                         return;
 
                     entered.Append(ToAsciiDigits(await splitBoxes.Nth(i).InputValueAsync()));
@@ -426,7 +418,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             }
             catch (PlaywrightException ex)
             {
-                if (HasReachedAuthenticatedPage())
+                if (await HasReachedAuthenticatedPageAsync())
                     return;
 
                 throw new InvalidOperationException("خواندن مقدار کد پیامکی برای کنترل نهایی ممکن نشد.", ex);
@@ -460,13 +452,13 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             }
             catch (PlaywrightException ex)
             {
-                if (HasReachedAuthenticatedPage())
+                if (await HasReachedAuthenticatedPageAsync())
                     return;
 
                 throw new InvalidOperationException("ورود کد پیامکی انجام نشد؛ صفحه Chrome را بررسی کنید.", ex);
             }
 
-            if (HasReachedAuthenticatedPage())
+            if (await HasReachedAuthenticatedPageAsync())
                 return;
 
             var actual = ToAsciiDigits(await otpInput.InputValueAsync());
@@ -476,8 +468,73 @@ public sealed class ChromeAutomationService : IAsyncDisposable
 
         // No extra confirm click: the portal validates the OTP from its own input handler.
         await Task.Delay(300);
-        if (!HasReachedAuthenticatedPage())
+        if (!await HasReachedAuthenticatedPageAsync())
             await _page.BringToFrontAsync();
+    }
+
+    private async Task<bool> TryAdoptAuthenticatedPortalPageAsync()
+    {
+        if (_context is null)
+            return false;
+
+        // SSO sometimes completes authentication by opening the registration page in a
+        // second Chrome tab. Keep the automation attached to the newest authenticated tab,
+        // not permanently to the original /login tab.
+        foreach (var candidate in _context.Pages.Reverse())
+        {
+            if (candidate.IsClosed ||
+                !Uri.TryCreate(candidate.Url, UriKind.Absolute, out var uri) ||
+                !uri.Host.EndsWith("my.gov.ir", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var path = uri.AbsolutePath;
+            var isDashboard = path.Contains("/dashboard", StringComparison.OrdinalIgnoreCase);
+            var isAccount = path.Contains("/account", StringComparison.OrdinalIgnoreCase);
+            var isRegistrationRoute = path.Contains("/register", StringComparison.OrdinalIgnoreCase);
+            var isLoginRoute = path.Contains("/login", StringComparison.OrdinalIgnoreCase);
+
+            if (isDashboard || isAccount)
+            {
+                _page = candidate;
+                try { await _page.BringToFrontAsync(); } catch { }
+                return true;
+            }
+
+            string body;
+            try
+            {
+                body = await candidate.Locator("body").InnerTextAsync(
+                    new LocatorInnerTextOptions { Timeout = 1800 });
+            }
+            catch
+            {
+                continue;
+            }
+
+            var normalized = NormalizeForMatch(body);
+            var hasRegistrationShell =
+                normalized.Contains(NormalizeForMatch("اتباع"), StringComparison.Ordinal) &&
+                normalized.Contains(NormalizeForMatch("ایرانی"), StringComparison.Ordinal) &&
+                normalized.Contains(NormalizeForMatch("تولد"), StringComparison.Ordinal) &&
+                (normalized.Contains(NormalizeForMatch("کد فیدا"), StringComparison.Ordinal) ||
+                 normalized.Contains(NormalizeForMatch("کدملی"), StringComparison.Ordinal));
+
+            var hasAuthenticatedIdentityForm =
+                normalized.Contains(NormalizeForMatch("کد فیدا"), StringComparison.Ordinal) &&
+                (normalized.Contains(NormalizeForMatch("شناسه"), StringComparison.Ordinal) ||
+                 normalized.Contains(NormalizeForMatch("گذرنامه"), StringComparison.Ordinal) ||
+                 normalized.Contains(NormalizeForMatch("فراگیر"), StringComparison.Ordinal));
+
+            if ((isRegistrationRoute && hasRegistrationShell) ||
+                (!isLoginRoute && hasAuthenticatedIdentityForm))
+            {
+                _page = candidate;
+                try { await _page.BringToFrontAsync(); } catch { }
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private async Task WaitForAuthenticatedPortalAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -486,16 +543,14 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         while (DateTime.UtcNow - started < timeout)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (_page is null || _page.IsClosed)
-                throw new InvalidOperationException("پنجره Chrome بسته شد؛ ورود متوقف شد.");
+            if (_context is null || _context.Pages.All(page => page.IsClosed))
+                throw new InvalidOperationException("تمام پنجره‌های Chrome بسته شدند؛ ورود متوقف شد.");
 
-            if (Uri.TryCreate(_page.Url, UriKind.Absolute, out var current) &&
-                current.Host.EndsWith("my.gov.ir", StringComparison.OrdinalIgnoreCase) &&
-                !current.AbsolutePath.Contains("/login", StringComparison.OrdinalIgnoreCase) &&
-                (current.AbsolutePath.Contains("/register", StringComparison.OrdinalIgnoreCase) ||
-                 current.AbsolutePath.Contains("/dashboard", StringComparison.OrdinalIgnoreCase) ||
-                 current.AbsolutePath.Contains("/account", StringComparison.OrdinalIgnoreCase)))
+            if (await TryAdoptAuthenticatedPortalPageAsync())
                 return;
+
+            if (_page is null || _page.IsClosed)
+                _page = _context.Pages.LastOrDefault(page => !page.IsClosed);
 
             var body = await ReadBodyTextSafelyAsync();
             var securityCodeRejected = body.Contains("کد امنیتی", StringComparison.OrdinalIgnoreCase) &&
@@ -511,9 +566,14 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             await Task.Delay(700, cancellationToken);
         }
 
+        var tabDetails = _context is null
+            ? "هیچ نشست فعالی وجود ندارد."
+            : string.Join(" | ", _context.Pages.Where(page => !page.IsClosed).Select(page => page.Url));
+        var lastBody = await ReadBodyTextSafelyAsync();
         throw new TimeoutException(
-            "ورود در زمان مجاز کامل نشد. پس از ورود آخرین رقم کد پیامکی، سامانه باید آن را خودکار بررسی کند؛ " +
-            "اگر خطای سامانه یا کد اشتباه نمایش داده می‌شود، آن را برطرف کرده و اجرای پرونده را دوباره آغاز کنید.");
+            "پس از وارد کردن کد پیامکی، ورود در ۹۰ ثانیه تأیید نشد. اگر صفحه ثبت‌نام در تب دیگری باز شده باشد، برنامه آن را بررسی کرده است. " +
+            "کد یا پیام خطای سامانه را در Chrome بررسی کنید.\nنشانی تب‌ها: " + tabDetails +
+            "\nمتن صفحه: " + Truncate(lastBody, 450));
     }
 
     private async Task OpenRegistrationForQueueAsync(CancellationToken cancellationToken)
@@ -701,7 +761,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         var target = frame.Locator("[data-dolatman-foreigners-choice]");
                         if (await target.CountAsync() > 0 && await target.First.IsVisibleAsync())
                         {
-                            await target.First.ClickAsync(new LocatorClickOptions { Timeout = 10000 });
+                            await target.First.ClickAsync(new LocatorClickOptions { Timeout = 10000, Force = true });
                             selectionConfirmed = await WaitForForeignersSelectionAsync(
                                 TimeSpan.FromSeconds(8), cancellationToken);
 
@@ -757,7 +817,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                                 var candidateText = NormalizeForMatch(await candidate.InnerTextAsync());
                                 if (candidateText == NormalizeForMatch("اتباع"))
                                 {
-                                    await candidate.ClickAsync(new LocatorClickOptions { Timeout = 2500 });
+                                    await candidate.ClickAsync(new LocatorClickOptions { Timeout = 2500, Force = true });
                                     selectionConfirmed = await WaitForForeignersSelectionAsync(
                                         TimeSpan.FromSeconds(3), cancellationToken);
 
@@ -775,7 +835,18 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         }
                         catch (PlaywrightException)
                         {
-                            // Try the next exact-text ancestor; never type until selection is confirmed.
+                            // Try a native click on the exact visible label; this also supports
+                            // custom React/Vue tabs rendered as nested non-semantic spans.
+                            try
+                            {
+                                await candidate.EvaluateAsync("el => el.click()");
+                                selectionConfirmed = await WaitForForeignersSelectionAsync(
+                                    TimeSpan.FromSeconds(2), cancellationToken);
+                                if (!selectionConfirmed && !identityFormReadyBeforeSelection)
+                                    selectionConfirmed = await IsIdentityFormReadyAsync();
+                            }
+                            catch (OperationCanceledException) { throw; }
+                            catch { /* Try the next exact-text ancestor. */ }
                         }
 
                         if (!selectionConfirmed)
