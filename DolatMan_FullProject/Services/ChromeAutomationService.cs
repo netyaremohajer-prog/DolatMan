@@ -131,10 +131,12 @@ public sealed class ChromeAutomationService : IAsyncDisposable
 
         // The identity form itself may remain on sso.my.gov.ir/register.
         // If it is already open, do not reject it merely because its host starts with sso.
-        if (url.AbsolutePath.Contains("/register", StringComparison.OrdinalIgnoreCase))
-            return;
+        if (!url.AbsolutePath.Contains("/register", StringComparison.OrdinalIgnoreCase))
+            await NavigateAsync(RegisterUrl);
 
-        await NavigateAsync(RegisterUrl);
+        // Manual and queue workflows must pass through the same explicit foreigners-choice
+        // confirmation before the identity fields can be filled.
+        await OpenRegistrationForQueueAsync(CancellationToken.None);
     }
 
     public async Task<string> FillIdentityFormAsync(Applicant applicant, int mappingIndex)
