@@ -93,6 +93,9 @@ Console.WriteLine("PASS: OTP entry stops touching digit locators after automatic
 await RunIdentityFieldsAndCustomDateRegressionAsync();
 Console.WriteLine("PASS: sibling FIDA label and custom Jalali day/month/year dropdowns.");
 
+await RunAuthenticatedSecondTabRegressionAsync();
+Console.WriteLine("PASS: automation adopts the authenticated SSO registration tab opened after OTP.");
+
 Console.WriteLine($"All {scenarios.Length} foreigners-selection regression tests passed.");
 
 static async Task RunClickableLookupRegressionAsync()
@@ -267,6 +270,11 @@ static async Task RunOtpNavigationRegressionAsync()
             boxes.forEach(box => box.addEventListener('input', () => {
               if (boxes.map(x => x.value).join('').length === 6) {
                 document.querySelector('#otp-boxes').remove();
+                document.body.innerHTML =
+                  '<h1>درگاه یکپارچه احراز هویت</h1>' +
+                  '<div>اتباع</div><div>ایرانی</div>' +
+                  '<div>روز ماه سال تولد</div><div>کد فیدا</div>' +
+                  '<input placeholder="شماره گذرنامه/شناسه یکتا">';
                 history.pushState({}, '', '/register');
               }
             }));
@@ -409,6 +417,72 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
         if (selectedDay != "15" || selectedMonth != "اردیبهشت" || selectedYear != "1370")
             throw new InvalidOperationException(
                 $"Jalali date mismatch. Got {selectedDay}/{selectedMonth}/{selectedYear}.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
+static async Task RunAuthenticatedSecondTabRegressionAsync()
+{
+    const string loginHtml = """
+        <!doctype html><html lang="fa" dir="rtl"><body>
+          <div>ورود به پنجره ملی</div>
+          <label>کد پیامکی</label>
+          <input id="otp" maxlength="6">
+        </body></html>
+        """;
+    const string registerHtml = """
+        <!doctype html><html lang="fa" dir="rtl"><body>
+          <h1>درگاه یکپارچه احراز هویت</h1>
+          <div class="tabs">
+            <div>اتباع</div><div>ایرانی</div>
+          </div>
+          <input placeholder="کد ملی">
+          <div>روز ماه سال تولد</div>
+          <div>کد فیدا</div>
+        </body></html>
+        """;
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+    var context = await browser.NewContextAsync();
+    await context.RouteAsync("**/*", async route =>
+    {
+        var url = route.Request.Url;
+        var body = url.Contains("/register", StringComparison.OrdinalIgnoreCase) ? registerHtml : loginHtml;
+        await route.FulfillAsync(new RouteFulfillOptions
+        {
+            Status = 200,
+            ContentType = "text/html; charset=utf-8",
+            Body = body
+        });
+    });
+
+    var loginPage = await context.NewPageAsync();
+    await loginPage.GotoAsync(ChromeAutomationService.LoginUrl);
+    var registrationPage = await context.NewPageAsync();
+    await registrationPage.GotoAsync(ChromeAutomationService.RegisterUrl);
+
+    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", loginPage);
+
+    try
+    {
+        var method = typeof(ChromeAutomationService).GetMethod(
+            "TryAdoptAuthenticatedPortalPageAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Active authenticated tab detector was not found.");
+        var task = method.Invoke(service, Array.Empty<object>()) as Task<bool>
+            ?? throw new InvalidOperationException("Active tab detector did not return Task<bool>.");
+        var adopted = await task;
+
+        if (!adopted)
+            throw new InvalidOperationException("The authenticated registration tab was not adopted.");
+        if (!service.CurrentUrl.Contains("/register", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Expected active /register tab, got '{service.CurrentUrl}'.");
     }
     finally
     {
