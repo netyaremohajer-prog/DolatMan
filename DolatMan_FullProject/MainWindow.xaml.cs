@@ -583,7 +583,7 @@ public partial class MainWindow : Window
         await RunBrowserActionAsync(async () =>
         {
             await _chrome.OpenRegisterAfterManualLoginAsync();
-            return "صفحه ثبت اطلاعات اتباع باز شد. گزینه اتباع را در صورت نیاز انتخاب کنید.";
+            return "گزینه «اتباع» انتخاب و تأیید شد؛ اکنون فرم آماده ورود اطلاعات است.";
         });
     }
 
