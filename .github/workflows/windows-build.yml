@@ -28,8 +28,11 @@ jobs:
       - name: Show SDK
         run: dotnet --info
 
-      - name: Clean
-        run: dotnet clean DolatMan_FullProject/DolatMan.csproj -c Release
+      - name: Remove stale generated files
+        shell: pwsh
+        run: |
+          if (Test-Path "DolatMan_FullProject/obj") { Remove-Item "DolatMan_FullProject/obj" -Recurse -Force }
+          if (Test-Path "DolatMan_FullProject/bin") { Remove-Item "DolatMan_FullProject/bin" -Recurse -Force }
 
       - name: Restore
         run: dotnet restore DolatMan_FullProject/DolatMan.csproj
