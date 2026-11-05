@@ -343,9 +343,20 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         if (code.Length < 4 || code.Length > 8)
             throw new InvalidOperationException("کد پیامکی باید بین ۴ تا ۸ رقم باشد.");
 
-        // The official portal automatically validates the OTP as soon as the last digit
-        // is entered. Do not search for or click a separate confirm/submit button here.
-        // The caller waits for the authenticated portal state immediately after this method.
+        bool HasReachedAuthenticatedPage()
+        {
+            if (!Uri.TryCreate(_page?.Url, UriKind.Absolute, out var current) ||
+                !current.Host.EndsWith("my.gov.ir", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            return current.AbsolutePath.Contains("/register", StringComparison.OrdinalIgnoreCase) ||
+                   current.AbsolutePath.Contains("/dashboard", StringComparison.OrdinalIgnoreCase) ||
+                   current.AbsolutePath.Contains("/account", StringComparison.OrdinalIgnoreCase);
+        }
+
+        // Do not use a locator that can silently change from OTP boxes to unrelated
+        // one-character controls after the portal navigates. The official portal validates
+        // automatically on the last digit, and may navigate to /register during this loop.
         var splitBoxes = _page!.Locator("input:visible[maxlength='1']");
         var splitCount = await splitBoxes.CountAsync();
 
@@ -353,17 +364,73 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         {
             for (var i = 0; i < code.Length; i++)
             {
+                if (HasReachedAuthenticatedPage())
+                    return;
+
+                var currentCount = await splitBoxes.CountAsync();
+                if (currentCount <= i)
+                {
+                    if (HasReachedAuthenticatedPage())
+                        return;
+
+                    throw new InvalidOperationException(
+                        $"کادر شماره {i + 1} کد پیامکی در صفحه ورود موجود نیست. " +
+                        "احتمالاً فرم سامانه تغییر کرده یا صفحه پیش از تکمیل کد جابه‌جا شده است؛ کد در فیلد دیگری وارد نشد.");
+                }
+
                 var box = splitBoxes.Nth(i);
-                await box.ClickAsync();
-                await box.FillAsync(string.Empty);
-                await box.PressSequentiallyAsync(
-                    code[i].ToString(),
-                    new LocatorPressSequentiallyOptions { Timeout = 5000 });
+                try
+                {
+                    if (!await box.IsVisibleAsync())
+                    {
+                        if (HasReachedAuthenticatedPage())
+                            return;
+
+                        throw new InvalidOperationException($"کادر شماره {i + 1} کد پیامکی قابل مشاهده نیست.");
+                    }
+
+                    await box.ClickAsync(new LocatorClickOptions { Timeout = 2500 });
+                    await box.FillAsync(string.Empty, new LocatorFillOptions { Timeout = 2500 });
+                    await box.PressSequentiallyAsync(
+                        code[i].ToString(),
+                        new LocatorPressSequentiallyOptions { Timeout = 2500 });
+                }
+                catch (PlaywrightException ex)
+                {
+                    if (HasReachedAuthenticatedPage())
+                        return;
+
+                    throw new InvalidOperationException(
+                        $"ورود رقم {i + 1} از کد پیامکی انجام نشد. صفحه Chrome را بررسی کنید. جزئیات: {ex.Message}", ex);
+                }
+
+                // If the last digit triggered automatic verification and navigation,
+                // stop touching the old OTP locators immediately.
+                if (HasReachedAuthenticatedPage())
+                    return;
             }
 
+            if (HasReachedAuthenticatedPage())
+                return;
+
             var entered = new System.Text.StringBuilder();
-            for (var i = 0; i < code.Length; i++)
-                entered.Append(ToAsciiDigits(await splitBoxes.Nth(i).InputValueAsync()));
+            try
+            {
+                for (var i = 0; i < code.Length; i++)
+                {
+                    if (HasReachedAuthenticatedPage())
+                        return;
+
+                    entered.Append(ToAsciiDigits(await splitBoxes.Nth(i).InputValueAsync()));
+                }
+            }
+            catch (PlaywrightException ex)
+            {
+                if (HasReachedAuthenticatedPage())
+                    return;
+
+                throw new InvalidOperationException("خواندن مقدار کد پیامکی برای کنترل نهایی ممکن نشد.", ex);
+            }
 
             if (entered.ToString() != code)
                 throw new InvalidOperationException("رقم‌های کد پیامکی به‌درستی در کادرهای سامانه وارد نشدند.");
@@ -384,20 +451,33 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             if (otpInput is null)
                 throw new InvalidOperationException("کادر کد پیامکی پیدا نشد؛ برای جلوگیری از ورود کد در فیلد اشتباه، عملیات متوقف شد.");
 
-            await otpInput.ClickAsync();
-            await otpInput.FillAsync(string.Empty);
-            await otpInput.PressSequentiallyAsync(code,
-                new LocatorPressSequentiallyOptions { Timeout = 10000 });
+            try
+            {
+                await otpInput.ClickAsync(new LocatorClickOptions { Timeout = 2500 });
+                await otpInput.FillAsync(string.Empty, new LocatorFillOptions { Timeout = 2500 });
+                await otpInput.PressSequentiallyAsync(code,
+                    new LocatorPressSequentiallyOptions { Timeout = 5000 });
+            }
+            catch (PlaywrightException ex)
+            {
+                if (HasReachedAuthenticatedPage())
+                    return;
+
+                throw new InvalidOperationException("ورود کد پیامکی انجام نشد؛ صفحه Chrome را بررسی کنید.", ex);
+            }
+
+            if (HasReachedAuthenticatedPage())
+                return;
 
             var actual = ToAsciiDigits(await otpInput.InputValueAsync());
             if (actual != code)
                 throw new InvalidOperationException("کد پیامکی در کادر سامانه درست ثبت نشد؛ کد را در Chrome بررسی کنید.");
         }
 
-        // Give the portal's last-digit input handler a brief moment to start its
-        // automatic verification/navigation. No extra click is sent.
+        // No extra confirm click: the portal validates the OTP from its own input handler.
         await Task.Delay(300);
-        await _page.BringToFrontAsync();
+        if (!HasReachedAuthenticatedPage())
+            await _page.BringToFrontAsync();
     }
 
     private async Task WaitForAuthenticatedPortalAsync(TimeSpan timeout, CancellationToken cancellationToken)
@@ -642,6 +722,72 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 {
                     // Continue searching other frames; the diagnostic below reports visible choices.
                 }
+            }
+        }
+
+        // The portal's current segmented control can be rendered as nested DIV/SPAN
+        // elements without role, tabindex, or a native button. In that layout the previous
+        // ancestor heuristic can find the text but click a non-interactive child. Try the
+        // exact visible text and then its text-only ancestors using real Playwright clicks.
+        if (!selectionConfirmed)
+        {
+            foreach (var frame in _page!.Frames)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var exactText = frame.GetByText("اتباع");
+                var matchCount = Math.Min(await exactText.CountAsync(), 20);
+
+                for (var i = 0; i < matchCount && !selectionConfirmed; i++)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    ILocator candidate = exactText.Nth(i);
+
+                    for (var depth = 0; depth < 5 && !selectionConfirmed; depth++)
+                    {
+                        if (await IsForeignersOptionSelectedAsync())
+                        {
+                            selectionConfirmed = true;
+                            break;
+                        }
+
+                        try
+                        {
+                            if (await candidate.IsVisibleAsync())
+                            {
+                                var candidateText = NormalizeForMatch(await candidate.InnerTextAsync());
+                                if (candidateText == NormalizeForMatch("اتباع"))
+                                {
+                                    await candidate.ClickAsync(new LocatorClickOptions { Timeout = 2500 });
+                                    selectionConfirmed = await WaitForForeignersSelectionAsync(
+                                        TimeSpan.FromSeconds(3), cancellationToken);
+
+                                    // Some portal builds do not expose selected-state ARIA/classes;
+                                    // in that case the two dedicated foreigner identity inputs must
+                                    // appear as a consequence of this click.
+                                    if (!selectionConfirmed && !identityFormReadyBeforeSelection)
+                                        selectionConfirmed = await IsIdentityFormReadyAsync();
+                                }
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (PlaywrightException)
+                        {
+                            // Try the next exact-text ancestor; never type until selection is confirmed.
+                        }
+
+                        if (!selectionConfirmed)
+                        {
+                            try { candidate = candidate.Locator("xpath=.."); }
+                            catch { break; }
+                        }
+                    }
+                }
+
+                if (selectionConfirmed)
+                    break;
             }
         }
 
