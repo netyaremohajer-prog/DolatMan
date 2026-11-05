@@ -1,0 +1,38 @@
+name: Windows WPF build
+
+on:
+  push:
+    branches:
+      - main
+      - fix/visible-chrome-and-repo-cleanup
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install .NET 10 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Show SDK
+        run: dotnet --info
+
+      - name: Clean
+        run: dotnet clean DolatMan_FullProject/DolatMan.csproj -c Release
+
+      - name: Restore
+        run: dotnet restore DolatMan_FullProject/DolatMan.csproj
+
+      - name: Build WPF app
+        run: dotnet build DolatMan_FullProject/DolatMan.csproj -c Release --no-restore
