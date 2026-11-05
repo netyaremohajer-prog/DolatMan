@@ -608,6 +608,10 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         }
                     }
                 }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
                 catch
                 {
                     // Continue searching other frames; the diagnostic below reports visible choices.
