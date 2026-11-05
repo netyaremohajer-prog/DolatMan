@@ -1,1 +1,1 @@
-Temporary trigger for the final clean Windows WPF build test.
+Temporary trigger for final Windows WPF build and self-contained publish validation after latest documentation/workflow update.
