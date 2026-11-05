@@ -906,7 +906,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
     private async Task<ILocator?> FindClickableByTextAsync(string[] tokens)
     {
         RequirePage();
-        var tokenValues = tokens.Select(NormalizeForMatch)
+        var tokenValues = tokens.Select(x => NormalizeForMatch(x).ToLowerInvariant())
             .Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
 
         // Search each frame in one DOM snapshot instead of counting a locator and then
