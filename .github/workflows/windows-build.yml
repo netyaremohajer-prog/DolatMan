@@ -39,3 +39,13 @@ jobs:
 
       - name: Build WPF app
         run: dotnet build DolatMan_FullProject/DolatMan.csproj -c Release --no-restore
+
+      - name: Publish self-contained Windows x64
+        run: dotnet publish DolatMan_FullProject/DolatMan.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false
+
+      - name: Verify published executable
+        shell: pwsh
+        run: |
+          $exe = "DolatMan_FullProject/bin/Release/net10.0-windows/win-x64/publish/DolatMan.exe"
+          if (-not (Test-Path $exe)) { throw "Published executable not found: $exe" }
+          Get-Item $exe | Format-List FullName,Length
