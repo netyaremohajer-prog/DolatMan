@@ -202,16 +202,8 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
         Headless = true
     });
     var context = await browser.NewContextAsync();
-    await context.RouteAsync("**/*", route => route.FulfillAsync(new RouteFulfillOptions
-    {
-        Status = 200,
-        ContentType = "text/html; charset=utf-8",
-        Body = html
-    }));
     var page = await context.NewPageAsync();
-    await page.GotoAsync(ChromeAutomationService.RegisterUrl);
-
-    var service = new ChromeAutomationService();
+    await page.SetContentAsync(html);    var service = new ChromeAutomationService();
     SetPrivateField(service, "_context", context);
     SetPrivateField(service, "_page", page);
 
@@ -380,10 +372,14 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
     using var playwright = await Playwright.CreateAsync();
     await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
     var context = await browser.NewContextAsync();
+    await context.RouteAsync("**/*", route => route.FulfillAsync(new RouteFulfillOptions
+    {
+        Status = 200,
+        ContentType = "text/html; charset=utf-8",
+        Body = html
+    }));
     var page = await context.NewPageAsync();
-    await page.SetContentAsync(html);
-
-    var service = new ChromeAutomationService();
+    await page.GotoAsync(ChromeAutomationService.RegisterUrl);    var service = new ChromeAutomationService();
     SetPrivateField(service, "_context", context);
     SetPrivateField(service, "_page", page);
 
