@@ -1,2 +1,0 @@
-This is a test file uploaded to verify GitHub write access.
-It does not contain project code or personal information.
