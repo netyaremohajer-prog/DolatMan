@@ -146,6 +146,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             throw new InvalidOperationException("ابتدا پس از ورود، صفحه ثبت اطلاعات اتباع را در Chrome باز کنید.");
         if (string.IsNullOrWhiteSpace(applicant.UniqueId) || string.IsNullOrWhiteSpace(applicant.FidaCode))
             throw new InvalidOperationException("شناسه یکتا و کد فیدا باید در پرونده متقاضی ذخیره شده باشند.");
+        if (!await IsForeignersOptionSelectedAsync())
+            throw new InvalidOperationException("پیش از ورود اطلاعات، انتخاب گزینه «اتباع» در صفحه تأیید نشد؛ برای جلوگیری از ثبت اشتباه، اطلاعات وارد نشد.");
 
         var firstValue = mappingIndex switch
         {
@@ -426,56 +428,254 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             await NavigateAsync(RegisterUrl);
 
         try { await _page!.WaitForLoadStateAsync(LoadState.DOMContentLoaded, new PageWaitForLoadStateOptions { Timeout = 20000 }); }
-        catch { /* SPA transitions may not emit a full load event. */ }
+        catch { /* The portal is an SPA and may not emit a full load event. */ }
 
-        // Allow the portal's SPA to render the registration panel before interacting.
-        var initialWait = DateTime.UtcNow;
-        while (DateTime.UtcNow - initialWait < TimeSpan.FromSeconds(12))
+        // IMPORTANT: identity inputs can already exist while the "اتباع" choice is still
+        // unselected. Never treat input presence as proof that the foreigners option was clicked.
+        var identityFormReadyBeforeSelection = await IsIdentityFormReadyAsync();
+        var selectionConfirmed = await IsForeignersOptionSelectedAsync();
+
+        var renderWait = DateTime.UtcNow;
+        while (!selectionConfirmed && DateTime.UtcNow - renderWait < TimeSpan.FromSeconds(20))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await IsForeignersOptionVisibleAsync()) break;
+            selectionConfirmed = await IsForeignersOptionSelectedAsync();
+            if (!selectionConfirmed) await Task.Delay(300, cancellationToken);
+        }
+
+        // Some portal versions expose "اتباع" as an option in a native HTML select.
+        if (!selectionConfirmed)
+        {
+            foreach (var frame in _page!.Frames)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var selects = frame.Locator("select:visible");
+                var selectCount = await selects.CountAsync();
+                for (var i = 0; i < selectCount; i++)
+                {
+                    var select = selects.Nth(i);
+                    var options = select.Locator("option");
+                    var optionCount = await options.CountAsync();
+                    for (var j = 0; j < optionCount; j++)
+                    {
+                        var option = options.Nth(j);
+                        var label = (await option.InnerTextAsync()).Trim();
+                        var value = await option.GetAttributeAsync("value") ?? "";
+                        if (!NormalizeForMatch(label).Contains(NormalizeForMatch("اتباع"), StringComparison.Ordinal))
+                            continue;
+
+                        if (!string.IsNullOrWhiteSpace(value))
+                            await select.SelectOptionAsync(value, new LocatorSelectOptionOptions { Timeout = 5000 });
+                        else
+                            await select.SelectOptionAsync(new[] { new SelectOptionValue { Label = label } },
+                                new LocatorSelectOptionOptions { Timeout = 5000 });
+
+                        selectionConfirmed = await WaitForForeignersSelectionAsync(TimeSpan.FromSeconds(8), cancellationToken);
+                        if (selectionConfirmed) break;
+                    }
+                    if (selectionConfirmed) break;
+                }
+                if (selectionConfirmed) break;
+            }
+        }
+
+        // Other portal versions render "اتباع" as a radio, tab, button, label, or nested card.
+        // Mark the actionable ancestor in JavaScript, then use Playwright's real pointer click.
+        if (!selectionConfirmed)
+        {
+            foreach (var frame in _page!.Frames)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                try
+                {
+                    var result = await frame.EvaluateAsync<string>("""
+                        () => {
+                          const norm = s => (s || '').normalize('NFKC')
+                            .replace(/[\s\u200c\u200f\u0640]/g, '')
+                            .replace(/[ي]/g, 'ی').replace(/[ك]/g, 'ک');
+                          const visible = el => {
+                            if (!el || !el.getClientRects().length) return false;
+                            const style = getComputedStyle(el);
+                            return style.visibility !== 'hidden' && style.display !== 'none' &&
+                              style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                          };
+                          const describes = el => norm([
+                            el.innerText, el.textContent, el.getAttribute('aria-label'),
+                            el.getAttribute('title'), el.value
+                          ].filter(Boolean).join(' '));
+                          const selected = el => {
+                            const nodes = [el, el.parentElement, el.parentElement?.parentElement].filter(Boolean);
+                            for (const node of nodes) {
+                              const cls = node.className?.toString() || '';
+                              if (node.getAttribute('aria-selected') === 'true' ||
+                                  node.getAttribute('aria-checked') === 'true' ||
+                                  node.getAttribute('aria-pressed') === 'true' ||
+                                  node.getAttribute('aria-current') === 'true' ||
+                                  node.getAttribute('data-selected') === 'true' ||
+                                  /active|selected|checked|Mui-selected|ant-tabs-tab-active/i.test(cls))
+                                return true;
+                              const radio = node.matches?.('input[type=radio]') ? node :
+                                node.querySelector?.('input[type=radio]');
+                              if (radio?.checked) return true;
+                            }
+                            const radio = el.matches?.('input[type=radio]') ? el :
+                              el.closest('label')?.querySelector('input[type=radio]');
+                            return radio?.checked === true;
+                          };
+
+                          const select = [...document.querySelectorAll('select')]
+                            .find(s => visible(s) &&
+                              [...s.selectedOptions].some(o => norm(o.label || o.textContent).includes('اتباع')));
+                          if (select) return 'selected';
+
+                          const radios = [...document.querySelectorAll('input[type=radio]')];
+                          for (const radio of radios) {
+                            const label = [
+                              ...(radio.labels ? [...radio.labels] : []),
+                              radio.closest('label'),
+                              radio.parentElement
+                            ].filter(Boolean).map(x => x.innerText || x.textContent || '').join(' ');
+                            if (!norm(label).includes('اتباع')) continue;
+                            if (radio.checked) return 'selected';
+                            const labelTarget = radio.closest('label') ||
+                              (radio.id ? document.querySelector('label[for="' + CSS.escape(radio.id) + '"]') : null);
+                            if (labelTarget && visible(labelTarget)) {
+                              labelTarget.setAttribute('data-dolatman-foreigners-choice', 'radio');
+                              return 'click-ready';
+                            }
+                          }
+
+                          const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
+                          const candidates = [...document.querySelectorAll(selector)]
+                            .filter(el => visible(el))
+                            .map(el => ({ el, text: describes(el) }))
+                            .filter(x => x.text.includes('اتباع') && x.text.length <= 100)
+                            .sort((a,b) => {
+                              const pa = a.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex]') ? 0 : 1;
+                              const pb = b.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex]') ? 0 : 1;
+                              return pa - pb || a.text.length - b.text.length;
+                            });
+
+                          for (const candidate of candidates) {
+                            const chosen = candidate.el;
+                            if (selected(chosen)) return 'selected';
+                            let actionable = chosen.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li');
+                            if (!actionable) {
+                              for (let node = chosen, depth = 0; node && depth < 6; node = node.parentElement, depth++) {
+                                const style = getComputedStyle(node);
+                                const cls = node.className?.toString() || '';
+                                if (node.onclick || style.cursor === 'pointer' ||
+                                    /tab|card|option|choice|select/i.test(cls)) {
+                                  actionable = node;
+                                  break;
+                                }
+                              }
+                            }
+                            actionable ||= chosen;
+                            if (!visible(actionable) || actionable.matches(':disabled,[aria-disabled="true"]'))
+                              continue;
+                            actionable.setAttribute('data-dolatman-foreigners-choice', 'click');
+                            return 'click-ready';
+                          }
+                          return 'not-found';
+                        }
+                        """);
+
+                    if (result == "selected")
+                    {
+                        selectionConfirmed = true;
+                        break;
+                    }
+
+                    if (result == "click-ready")
+                    {
+                        var target = frame.Locator("[data-dolatman-foreigners-choice]");
+                        if (await target.CountAsync() > 0 && await target.First.IsVisibleAsync())
+                        {
+                            await target.First.ClickAsync(new LocatorClickOptions { Timeout = 10000 });
+                            selectionConfirmed = await WaitForForeignersSelectionAsync(
+                                TimeSpan.FromSeconds(8), cancellationToken);
+
+                            // On portal builds without aria/class selection metadata, a successful
+                            // click that reveals the identity controls is the second confirmation.
+                            if (!selectionConfirmed && !identityFormReadyBeforeSelection)
+                                selectionConfirmed = await IsIdentityFormReadyAsync();
+
+                            if (selectionConfirmed) break;
+                        }
+                    }
+                }
+                catch
+                {
+                    // Continue searching other frames; the diagnostic below reports visible choices.
+                }
+            }
+        }
+
+        // Do not proceed to typing unless the option itself was confirmed, not merely the form.
+        if (!selectionConfirmed)
+            throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync(
+                "گزینه «اتباع» انتخاب نشد یا انتخاب آن قابل تأیید نبود. اطلاعات متقاضی وارد نشد و هیچ فرمی ارسال نشد."));
+
+        var started = DateTime.UtcNow;
+        while (DateTime.UtcNow - started < TimeSpan.FromSeconds(60))
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (await IsIdentityFormReadyAsync()) return;
             await Task.Delay(400, cancellationToken);
         }
 
-        // Some portal versions expose "اتباع" as a native select option instead of a tab.
-        foreach (var frame in _page!.Frames)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            var selects = frame.Locator("select:visible");
-            var selectCount = await selects.CountAsync();
-            for (var i = 0; i < selectCount; i++)
-            {
-                var select = selects.Nth(i);
-                var options = select.Locator("option");
-                var optionCount = await options.CountAsync();
-                for (var j = 0; j < optionCount; j++)
-                {
-                    var option = options.Nth(j);
-                    var label = (await option.InnerTextAsync()).Trim();
-                    var value = await option.GetAttributeAsync("value") ?? "";
-                    if (!NormalizeForMatch(label).Contains(NormalizeForMatch("اتباع"), StringComparison.Ordinal))
-                        continue;
-                    if (!string.IsNullOrWhiteSpace(value))
-                        await select.SelectOptionAsync(value, new LocatorSelectOptionOptions { Timeout = 5000 });
-                    else
-                        await select.SelectOptionAsync(new[] { new SelectOptionValue { Label = label } },
-                            new LocatorSelectOptionOptions { Timeout = 5000 });
-                    await Task.Delay(500, cancellationToken);
-                    if (await IsIdentityFormReadyAsync()) return;
-                }
-            }
-        }
+        throw new TimeoutException(await BuildRegistrationDiagnosticAsync(
+            "گزینه «اتباع» انتخاب شد، اما کادرهای شناسه یکتا و کد فیدا در صفحه ظاهر نشدند."));
+    }
 
-        // Other versions render the choice as a tab, radio card, button, or clickable
-        // container with a nested text node. Match the visible Persian text after normalizing
-        // Arabic/Persian letters and whitespace, then click the nearest actionable ancestor.
-        var clicked = false;
+    private async Task<bool> IsForeignersOptionVisibleAsync()
+    {
         foreach (var frame in _page!.Frames)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                var result = await frame.EvaluateAsync<string>("""
+                var visible = await frame.EvaluateAsync<bool>("""
+                    () => {
+                      const norm = s => (s || '').normalize('NFKC')
+                        .replace(/[\s\u200c\u200f\u0640]/g, '')
+                        .replace(/[ي]/g, 'ی').replace(/[ك]/g, 'ک');
+                      const isVisible = el => {
+                        if (!el || !el.getClientRects().length) return false;
+                        const style = getComputedStyle(el);
+                        return style.visibility !== 'hidden' && style.display !== 'none' &&
+                          style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                      };
+                      for (const select of document.querySelectorAll('select')) {
+                        if (isVisible(select) &&
+                            [...select.options].some(o => norm(o.label || o.textContent).includes('اتباع')))
+                          return true;
+                      }
+                      const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
+                      return [...document.querySelectorAll(selector)].some(el => {
+                        if (!isVisible(el)) return false;
+                        const label = norm([
+                          el.innerText, el.textContent, el.getAttribute('aria-label'), el.getAttribute('title')
+                        ].filter(Boolean).join(' '));
+                        return label.includes('اتباع') && label.length <= 100;
+                      });
+                    }
+                    """);
+                if (visible) return true;
+            }
+            catch { }
+        }
+        return false;
+    }
+
+    private async Task<bool> IsForeignersOptionSelectedAsync()
+    {
+        foreach (var frame in _page!.Frames)
+        {
+            try
+            {
+                var selected = await frame.EvaluateAsync<bool>("""
                     () => {
                       const norm = s => (s || '').normalize('NFKC')
                         .replace(/[\s\u200c\u200f\u0640]/g, '')
@@ -486,75 +686,57 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         return style.visibility !== 'hidden' && style.display !== 'none' &&
                           style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
                       };
-                      const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span,input[type=radio]';
-                      const candidates = [...document.querySelectorAll(selector)]
-                        .filter(el => visible(el))
-                        .map(el => {
-                          const label = [
-                            el.innerText, el.textContent, el.getAttribute('aria-label'),
-                            el.getAttribute('title'), el.value,
-                            el.closest('label')?.innerText
-                          ].filter(Boolean).join(' ');
-                          return { el, text: norm(label) };
-                        })
-                        .filter(x => x.text.includes('اتباع') && x.text.length <= 100)
-                        .sort((a,b) => {
-                          const pa = a.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],input[type=radio]') ? 0 : 1;
-                          const pb = b.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],input[type=radio]') ? 0 : 1;
-                          return pa - pb || a.text.length - b.text.length;
-                        });
-                      if (!candidates.length) return 'not-found';
-                      const chosen = candidates[0].el;
-                      let actionable = chosen.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li,input[type=radio]');
-                      if (!actionable) {
-                        let node = chosen;
-                        for (let depth = 0; node && depth < 6; depth++, node = node.parentElement) {
-                          const style = getComputedStyle(node);
+                      const selectedState = el => {
+                        const nodes = [el, el.parentElement, el.parentElement?.parentElement].filter(Boolean);
+                        for (const node of nodes) {
                           const cls = node.className?.toString() || '';
-                          if (node.onclick || style.cursor === 'pointer' || /tab|card|option|choice|select/i.test(cls)) {
-                            actionable = node;
-                            break;
-                          }
+                          if (node.getAttribute('aria-selected') === 'true' ||
+                              node.getAttribute('aria-checked') === 'true' ||
+                              node.getAttribute('aria-pressed') === 'true' ||
+                              node.getAttribute('aria-current') === 'true' ||
+                              node.getAttribute('data-selected') === 'true' ||
+                              /active|selected|checked|Mui-selected|ant-tabs-tab-active/i.test(cls))
+                            return true;
+                          const radio = node.matches?.('input[type=radio]') ? node :
+                            node.querySelector?.('input[type=radio]');
+                          if (radio?.checked) return true;
                         }
+                        const radio = el.matches?.('input[type=radio]') ? el :
+                          el.closest('label')?.querySelector('input[type=radio]');
+                        return radio?.checked === true;
+                      };
+                      for (const select of document.querySelectorAll('select')) {
+                        if (visible(select) &&
+                            [...select.selectedOptions].some(o => norm(o.label || o.textContent).includes('اتباع')))
+                          return true;
                       }
-                      actionable ||= chosen.parentElement || chosen;
-                      const selected = actionable.getAttribute('aria-selected') === 'true' ||
-                        actionable.getAttribute('aria-checked') === 'true' ||
-                        actionable.getAttribute('aria-pressed') === 'true' ||
-                        actionable.getAttribute('aria-current') === 'true' ||
-                        actionable.checked === true ||
-                        /active|selected|checked/i.test(actionable.className?.toString() || '');
-                      if (selected) return 'already-selected';
-                      actionable.scrollIntoView({ block: 'center', inline: 'center' });
-                      actionable.click();
-                      return 'clicked';
+                      const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
+                      return [...document.querySelectorAll(selector)].some(el => {
+                        if (!visible(el)) return false;
+                        const label = norm([
+                          el.innerText, el.textContent, el.getAttribute('aria-label'), el.getAttribute('title')
+                        ].filter(Boolean).join(' '));
+                        return label.includes('اتباع') && label.length <= 100 && selectedState(el);
+                      });
                     }
                     """);
-                if (result == "clicked" || result == "already-selected")
-                {
-                    clicked = true;
-                    break;
-                }
+                if (selected) return true;
             }
-            catch
-            {
-                // Continue searching other frames; the diagnostic below explains what remained visible.
-            }
+            catch { }
         }
+        return false;
+    }
 
-        if (!clicked && !await IsIdentityFormReadyAsync())
-            throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync(
-                "گزینه «اتباع» در کنترل‌های قابل مشاهده پیدا نشد و فرم اتباع نیز نمایش داده نشده است."));
-
+    private async Task<bool> WaitForForeignersSelectionAsync(TimeSpan timeout, CancellationToken cancellationToken)
+    {
         var started = DateTime.UtcNow;
-        while (DateTime.UtcNow - started < TimeSpan.FromSeconds(60))
+        while (DateTime.UtcNow - started < timeout)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (await IsIdentityFormReadyAsync()) return;
-            await Task.Delay(400, cancellationToken);
+            if (await IsForeignersOptionSelectedAsync()) return true;
+            await Task.Delay(250, cancellationToken);
         }
-        throw new TimeoutException(await BuildRegistrationDiagnosticAsync(
-            "پس از انتخاب «اتباع»، کادرهای شناسه یکتا و کد فیدا در صفحه ظاهر نشدند."));
+        return false;
     }
 
     private async Task<bool> IsIdentityFormReadyAsync()
