@@ -183,10 +183,15 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
             <output id="status"></output>
             <script>
               const boxes = [...document.querySelectorAll('.otp-digit')];
-              boxes.forEach(box => box.addEventListener('input', () => {
-                if (boxes.map(x => x.value).join('').length === 6)
+              const verifyOtp = () => {
+                if (boxes.every(x => x.value.length === 1) &&
+                    boxes.map(x => x.value).join('').length === 6)
                   document.body.dataset.autoVerified = 'true';
-              }));
+              };
+              boxes.forEach(box =>
+                ['input','keyup','change'].forEach(eventName =>
+                  box.addEventListener(eventName, verifyOtp)));
+
             </script>
           </body></html>
           """;
