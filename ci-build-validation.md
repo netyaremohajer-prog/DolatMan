@@ -1,3 +1,3 @@
 # Temporary Windows build validation
 
-This branch exists only to trigger the Windows WPF build workflow against the current main branch.
+This commit triggers a fresh Windows/.NET 10 WPF build after removing tracked obj artifacts and correcting restore order.
