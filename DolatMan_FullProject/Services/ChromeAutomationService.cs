@@ -167,7 +167,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         var editable = await GetEditableInputsAsync();
         var usedFields = new HashSet<int>();
         var firstMatch = await FindIdentityInputAsync(editable, usedFields,
-            new[] { "shenasaeiCode", "shenasaei-code", "passportCode", "passport-code", "شناسه یکتا", "شناسه", "یکتا", "گذرنامه", "فراگیر", "passport", "unique" });
+            new[] { "shenasaeiCode", "shenasaei-code", "passportCode", "passport-code", "شناسه یکتا", "شناسه", "یکتا", "کد شناسایی", "شناسایی", "گذرنامه", "فراگیر", "کد اتباع", "passport", "unique", "identity" });
         if (firstMatch.Locator is not null) usedFields.Add(firstMatch.Index);
         var secondMatch = await FindIdentityInputAsync(editable, usedFields,
             new[] { "fidaCode", "fida-code", "کد فیدا", "فیدا", "fida" });
@@ -565,8 +565,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         var details = new List<string>();
         foreach (var item in inputs.Take(8))
         {
-            var desc = await DescribeAsync(item.Locator);
-            details.Add(string.IsNullOrWhiteSpace(desc) ? $"input({item.Type})" : desc.Trim());
+            var desc = await DescribeIdentityFieldAsync(item.Locator);
+            details.Add(string.IsNullOrWhiteSpace(desc) ? $"input({item.Type})" : desc.Replace('\u001f', '/').Trim());
         }
         var buttonDetails = new List<string>();
         foreach (var frame in _page!.Frames)
@@ -928,7 +928,9 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             var nearby = parts.Length > 1 ? NormalizeForMatch(parts[1]) : "";
             var directMatch = normalizedTokens.Any(t => direct.Contains(t, StringComparison.Ordinal));
             var nearbyMatch = normalizedTokens.Any(t => nearby.Contains(t, StringComparison.Ordinal));
-            var score = directMatch ? 100 : nearbyMatch ? 20 : 0;
+            var directSpecificity = normalizedTokens.Where(t => direct.Contains(t, StringComparison.Ordinal)).Select(t => t.Length).DefaultIfEmpty(0).Max();
+            var nearbySpecificity = normalizedTokens.Where(t => nearby.Contains(t, StringComparison.Ordinal)).Select(t => t.Length).DefaultIfEmpty(0).Max();
+            var score = directMatch ? 100 + directSpecificity : nearbyMatch ? 20 + nearbySpecificity : 0;
             if (score > 0) ranked.Add((candidates[i].Locator, i, score));
         }
 
@@ -948,9 +950,10 @@ public sealed class ChromeAutomationService : IAsyncDisposable
               const direct = [
                 el.getAttribute('placeholder'), el.getAttribute('name'), el.id,
                 el.getAttribute('aria-label'), el.getAttribute('title'),
-                el.getAttribute('data-testid'), el.getAttribute('autocomplete'),
+                el.getAttribute('data-testid'), el.getAttribute('data-name'), el.getAttribute('data-placeholder'),
+                el.getAttribute('aria-describedby'), el.getAttribute('autocomplete'),
                 texts(el.labels ? [...el.labels] : []),
-                texts((el.getAttribute('aria-labelledby') || '').split(/\\s+/).map(id => document.getElementById(id))),
+                texts((el.getAttribute('aria-labelledby') || '').split(/\s+/).map(id => document.getElementById(id))),
                 el.closest('label')?.innerText,
                 el.previousElementSibling?.innerText
               ].filter(Boolean).join(' ');
