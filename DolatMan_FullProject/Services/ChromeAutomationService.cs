@@ -518,7 +518,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                           };
                           const selected = el => {
                             const actionable = el.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li') || el;
-                            const nodes = [el, actionable, actionable.parentElement].filter(Boolean);
+                            const nodes = [...new Set([el, actionable])].filter(Boolean);
                             for (const node of nodes) {
                               const cls = node.className?.toString() || '';
                               if (node.getAttribute('aria-selected') === 'true' ||
@@ -563,7 +563,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                           const candidates = [...document.querySelectorAll(selector)]
                             .filter(el => visible(el))
                             .map(el => ({ el, text: describes(el) }))
-                            .filter(x => x.text.includes('اتباع') && x.text.length <= 100)
+                            .filter(x => x.text.includes('اتباع') && !x.text.includes('ایرانی') && x.text.length <= 30)
                             .sort((a,b) => {
                               const pa = a.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex]') ? 0 : 1;
                               const pb = b.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex]') ? 0 : 1;
@@ -675,7 +675,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         const label = norm([
                           el.innerText, el.textContent, el.getAttribute('aria-label'), el.getAttribute('title')
                         ].filter(Boolean).join(' '));
-                        return label.includes('اتباع') && label.length <= 100;
+                        return label.includes('اتباع') && !label.includes('ایرانی') && label.length <= 30;
                       });
                     }
                     """);
@@ -715,7 +715,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                       };
                       const selectedState = el => {
                         const actionable = el.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li') || el;
-                        const nodes = [el, actionable, actionable.parentElement].filter(Boolean);
+                        const nodes = [...new Set([el, actionable])].filter(Boolean);
                         for (const node of nodes) {
                           const cls = node.className?.toString() || '';
                           if (node.getAttribute('aria-selected') === 'true' ||
@@ -744,7 +744,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         const label = norm([
                           el.innerText, el.textContent, el.getAttribute('aria-label'), el.getAttribute('title')
                         ].filter(Boolean).join(' '));
-                        return label.includes('اتباع') && label.length <= 100 && selectedState(el);
+                        return label.includes('اتباع') && !label.includes('ایرانی') && label.length <= 30 && selectedState(el);
                       });
                     }
                     """);
@@ -906,17 +906,57 @@ public sealed class ChromeAutomationService : IAsyncDisposable
     private async Task<ILocator?> FindClickableByTextAsync(string[] tokens)
     {
         RequirePage();
-        var candidates = _page!.Locator("button:visible, input[type='submit']:visible, [role='button']:visible, a:visible");
-        var count = await candidates.CountAsync();
-        for (var i = 0; i < count; i++)
+        var tokenValues = tokens.Select(NormalizeForMatch)
+            .Where(x => !string.IsNullOrWhiteSpace(x)).ToArray();
+
+        // Search each frame in one DOM snapshot instead of counting a locator and then
+        // indexing it with Nth(i). The portal re-renders buttons during login and that
+        // made the old indexed locator wait 30 seconds for an element that had moved.
+        foreach (var frame in _page!.Frames)
         {
-            var item = candidates.Nth(i);
-            string label;
-            var tag = await item.EvaluateAsync<string>("el => el.tagName.toLowerCase()");
-            if (tag == "input") label = await item.GetAttributeAsync("value") ?? "";
-            else label = await item.InnerTextAsync();
-            if (tokens.Any(token => label.Contains(token, StringComparison.OrdinalIgnoreCase)))
-                return item;
+            try
+            {
+                var result = await frame.EvaluateAsync<string>("""
+                    tokens => {
+                      const norm = s => (s || '').normalize('NFKC')
+                        .replace(/[\\s\\u200c\\u200f\\u0640]/g, '')
+                        .replace(/[ي]/g, 'ی').replace(/[ك]/g, 'ک').toLowerCase();
+                      document.querySelectorAll('[data-dolatman-click-target]')
+                        .forEach(el => el.removeAttribute('data-dolatman-click-target'));
+                      const items = [...document.querySelectorAll(
+                        'button,input[type=submit],[role=button],a,[role=tab],[role=radio],label,[tabindex]'
+                      )].filter(el => {
+                        const style = getComputedStyle(el);
+                        return el.getClientRects().length &&
+                          style.display !== 'none' && style.visibility !== 'hidden' &&
+                          style.opacity !== '0' && !el.matches(':disabled,[aria-disabled="true"]') &&
+                          !el.closest('[aria-hidden="true"]');
+                      }).map(el => {
+                        const text = el.matches('input') ?
+                          (el.value || el.getAttribute('aria-label') || el.title || '') :
+                          (el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '');
+                        return { el, text: norm(text) };
+                      }).filter(x => tokens.some(t => x.text.includes(norm(t))));
+                      items.sort((a,b) => {
+                        const ae = tokens.some(t => a.text === norm(t)) ? 0 : 1;
+                        const be = tokens.some(t => b.text === norm(t)) ? 0 : 1;
+                        return ae - be || a.text.length - b.text.length;
+                      });
+                      if (!items.length) return 'not-found';
+                      items[0].el.setAttribute('data-dolatman-click-target','true');
+                      return 'found';
+                    }
+                    """, tokenValues);
+
+                if (result != "found") continue;
+                var target = frame.Locator("[data-dolatman-click-target='true']");
+                if (await target.CountAsync() > 0 && await target.First.IsVisibleAsync())
+                    return target.First;
+            }
+            catch
+            {
+                // A frame may detach while the portal navigates; continue with remaining frames.
+            }
         }
         return null;
     }
