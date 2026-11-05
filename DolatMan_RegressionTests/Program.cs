@@ -197,8 +197,14 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
         Headless = true
     });
     var context = await browser.NewContextAsync();
+    await context.RouteAsync("**/*", route => route.FulfillAsync(new RouteFulfillOptions
+    {
+        Status = 200,
+        ContentType = "text/html; charset=utf-8",
+        Body = html
+    }));
     var page = await context.NewPageAsync();
-    await page.SetContentAsync(html);
+    await page.GotoAsync(ChromeAutomationService.RegisterUrl);
 
     var service = new ChromeAutomationService();
     SetPrivateField(service, "_context", context);
