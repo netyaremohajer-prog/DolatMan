@@ -270,6 +270,11 @@ static async Task RunOtpNavigationRegressionAsync()
             boxes.forEach(box => box.addEventListener('input', () => {
               if (boxes.map(x => x.value).join('').length === 6) {
                 document.querySelector('#otp-boxes').remove();
+                document.body.innerHTML =
+                  '<h1>درگاه یکپارچه احراز هویت</h1>' +
+                  '<div>اتباع</div><div>ایرانی</div>' +
+                  '<div>روز ماه سال تولد</div><div>کد فیدا</div>' +
+                  '<input placeholder="شماره گذرنامه/شناسه یکتا">';
                 history.pushState({}, '', '/register');
               }
             }));
