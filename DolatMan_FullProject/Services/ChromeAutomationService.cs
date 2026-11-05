@@ -593,7 +593,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                             if (!el || !el.getClientRects().length) return false;
                             const style = getComputedStyle(el);
                             return style.visibility !== 'hidden' && style.display !== 'none' &&
-                              style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                              style.opacity !== '0' && !el.closest('[aria-hidden=true]');
                           };
                           const describes = el => norm([
                             el.innerText, el.textContent, el.getAttribute('aria-label'),
@@ -823,7 +823,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         if (!el || !el.getClientRects().length) return false;
                         const style = getComputedStyle(el);
                         return style.visibility !== 'hidden' && style.display !== 'none' &&
-                          style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                          style.opacity !== '0' && !el.closest('[aria-hidden=true]');
                       };
                       for (const select of document.querySelectorAll('select')) {
                         if (isVisible(select) &&
@@ -862,7 +862,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         if (!el || !el.getClientRects().length) return false;
                         const style = getComputedStyle(el);
                         return style.visibility !== 'hidden' && style.display !== 'none' &&
-                          style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                          style.opacity !== '0' && !el.closest('[aria-hidden=true]');
                       };
                       const hasSelectedClass = className => {
                         const tokens = (className || '').toString()
@@ -1114,7 +1114,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                         return el.getClientRects().length &&
                           style.display !== 'none' && style.visibility !== 'hidden' &&
                           style.opacity !== '0' && !el.matches(':disabled,[aria-disabled="true"]') &&
-                          !el.closest('[aria-hidden="true"]');
+                          !el.closest('[aria-hidden=true]');
                       }).map(el => {
                         const text = el.matches('input') ?
                           (el.value || el.getAttribute('aria-label') || el.title || '') :
@@ -1565,7 +1565,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                     + "const aliases={day:['روز','day'],month:['ماه','month'],year:['سال','year']};"
                     + "const other={day:['ماه','سال'],month:['روز','سال'],year:['روز','ماه']};"
                     + "const norm=s=>(s||'').normalize('NFKC').replace(/[\\s\\u200c\\u200f\\u0640]/g,'').replace(/[ي]/g,'ی').replace(/[ك]/g,'ک').toLowerCase();"
-                    + "const visible=el=>{if(!el||!el.getClientRects().length)return false;const st=getComputedStyle(el);return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&!el.closest('[aria-hidden="true"]');};"
+                    + "const visible=el=>{if(!el||!el.getClientRects().length)return false;const st=getComputedStyle(el);return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&!el.closest('[aria-hidden=true]');};"
                     + "const selector='input,select,button,[role=combobox],[role=button],[aria-haspopup],[aria-expanded],[tabindex],[class*=select],[class*=Select],[class*=dropdown],[class*=Dropdown],div,span';"
                     + "const candidates=[...document.querySelectorAll(selector)].filter(visible).map(el=>{"
                     + "const own=(el.innerText||el.textContent||'').trim();"
@@ -1670,7 +1670,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             + "const norm=s=>(s||'').normalize('NFKC').replace(/[\\s\\u200c\\u200f\\u0640]/g,'').replace(/[ي]/g,'ی').replace(/[ك]/g,'ک');"
             + "const ascii=s=>(s||'').replace(/[۰-۹٠-٩]/g,ch=>{const a='۰۱۲۳۴۵۶۷۸۹',b='٠١٢٣٤٥٦٧٨٩';let i=a.indexOf(ch);if(i>=0)return String(i);i=b.indexOf(ch);return i>=0?String(i):ch;});"
             + "const num=s=>ascii(s).replace(/[\\s,٬]/g,'').replace(/^0+(?=\\d)/,'');"
-            + "const visible=el=>{if(!el||!el.getClientRects().length)return false;const st=getComputedStyle(el);return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&!el.closest('[aria-hidden="true"]');};"
+            + "const visible=el=>{if(!el||!el.getClientRects().length)return false;const st=getComputedStyle(el);return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&!el.closest('[aria-hidden=true]');};"
             + "document.querySelectorAll('[data-dolatman-date-option]').forEach(el=>el.removeAttribute('data-dolatman-date-option'));"
             + "const wantedLabel=norm(args.Label),wantedNumber=num(args.Value);"
             + "const selector='option,[role=option],[role=menuitem],li,button,[role=button],[tabindex],div,span';"
