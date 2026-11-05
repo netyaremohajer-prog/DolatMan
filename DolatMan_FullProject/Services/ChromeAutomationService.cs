@@ -919,7 +919,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 var result = await frame.EvaluateAsync<string>("""
                     tokens => {
                       const norm = s => (s || '').normalize('NFKC')
-                        .replace(/[\\s\\u200c\\u200f\\u0640]/g, '')
+                        .replace(/[\s\u200c\u200f\u0640]/g, '')
                         .replace(/[ي]/g, 'ی').replace(/[ك]/g, 'ک').toLowerCase();
                       document.querySelectorAll('[data-dolatman-click-target]')
                         .forEach(el => el.removeAttribute('data-dolatman-click-target'));
