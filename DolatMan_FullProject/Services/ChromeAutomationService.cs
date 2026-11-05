@@ -161,20 +161,32 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             _ => throw new InvalidOperationException("روش ورود معتبر انتخاب نشده است.")
         };
 
-        var fieldSelector = "input:visible, textarea:visible, [contenteditable='true']:visible, [role='textbox']:visible";
-        var first = await FindByDescriptionAsync(fieldSelector, new[] { "shenasaeiCode", "shenasaei-code", "passportCode", "passport-code", "شناسه", "یکتا", "گذرنامه", "فراگیر", "passport" });
-        var second = await FindByDescriptionAsync(fieldSelector, new[] { "fidaCode", "fida-code", "کد فیدا", "فیدا", "fida" });
-
+        // Identify the two identity fields independently. The portal sometimes renders
+        // labels as sibling elements (not associated HTML <label>s), and the form may also
+        // contain date controls; therefore a global "exactly two inputs" fallback is unsafe.
         var editable = await GetEditableInputsAsync();
+        var usedFields = new HashSet<int>();
+        var firstMatch = await FindIdentityInputAsync(editable, usedFields,
+            new[] { "shenasaeiCode", "shenasaei-code", "passportCode", "passport-code", "شناسه یکتا", "شناسه", "یکتا", "گذرنامه", "فراگیر", "passport", "unique" });
+        if (firstMatch.Locator is not null) usedFields.Add(firstMatch.Index);
+        var secondMatch = await FindIdentityInputAsync(editable, usedFields,
+            new[] { "fidaCode", "fida-code", "کد فیدا", "فیدا", "fida" });
+
+        ILocator? first = firstMatch.Locator;
+        ILocator? second = secondMatch.Locator;
         if (first is null || second is null)
         {
-            // Only use positional fallback when the photographed form has exactly two editable
-            // text inputs. If the DOM contains extra fields, guessing their order could put
-            // identity data into the wrong field, so stop instead.
-            if (editable.Count != 2)
-                throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync("دو کادر شناسه با اطمینان شناسایی نشدند؛ برای جلوگیری از ورود اطلاعات در فیلد اشتباه، عملیات متوقف شد."));
-            first = editable[0].Locator;
-            second = editable[1].Locator;
+            // Positional fallback is allowed only when exactly two editable fields exist.
+            if (editable.Count == 2)
+            {
+                first = editable[0].Locator;
+                second = editable[1].Locator;
+            }
+            else
+            {
+                throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync(
+                    "کادرهای شناسه یکتا و کد فیدا با اطمینان از روی مشخصات فرم شناسایی نشدند؛ اطلاعات وارد نشد تا در فیلد اشتباه قرار نگیرد."));
+            }
         }
 
         var expectedFirst = ToAsciiDigits(firstValue.Trim());
@@ -192,8 +204,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         // controls changed, stop instead of sending an unverified identity form.
         var actualFirst = await ReadEditableValueAsync(first);
         var actualSecond = await ReadEditableValueAsync(second);
-        if (NormalizeNumber(actualFirst) != NormalizeNumber(expectedFirst) ||
-            NormalizeNumber(actualSecond) != NormalizeNumber(expectedSecond))
+        if (NormalizeDigitsExact(actualFirst) != NormalizeDigitsExact(expectedFirst) ||
+            NormalizeDigitsExact(actualSecond) != NormalizeDigitsExact(expectedSecond))
             throw new InvalidOperationException("مقادیر دو کادر شناسه پس از ورود با مقدار مورد انتظار یکسان نیستند؛ فرم ثبت نشد.");
 
         var dateResult = await FillBirthDateAsync(applicant.BirthDate);
@@ -416,44 +428,111 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         try { await _page!.WaitForLoadStateAsync(LoadState.DOMContentLoaded, new PageWaitForLoadStateOptions { Timeout = 20000 }); }
         catch { /* SPA transitions may not emit a full load event. */ }
 
-        // IMPORTANT: the portal commonly opens with the «اتباع» tab already selected.
-        // Clicking an already-selected tab can toggle/switch the panel and hide its inputs.
-        // First verify the real visible identity fields; click the tab only when they are absent.
-        if (await IsIdentityFormReadyAsync())
-            return;
+        // Allow the portal's SPA to render the registration panel before interacting.
+        var initialWait = DateTime.UtcNow;
+        while (DateTime.UtcNow - initialWait < TimeSpan.FromSeconds(12))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await IsIdentityFormReadyAsync()) return;
+            await Task.Delay(400, cancellationToken);
+        }
 
+        // Some portal versions expose "اتباع" as a native select option instead of a tab.
+        foreach (var frame in _page!.Frames)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var selects = frame.Locator("select:visible");
+            var selectCount = await selects.CountAsync();
+            for (var i = 0; i < selectCount; i++)
+            {
+                var select = selects.Nth(i);
+                var options = select.Locator("option");
+                var optionCount = await options.CountAsync();
+                for (var j = 0; j < optionCount; j++)
+                {
+                    var option = options.Nth(j);
+                    var label = (await option.InnerTextAsync()).Trim();
+                    var value = await option.GetAttributeAsync("value") ?? "";
+                    if (!NormalizeForMatch(label).Contains(NormalizeForMatch("اتباع"), StringComparison.Ordinal))
+                        continue;
+                    if (!string.IsNullOrWhiteSpace(value))
+                        await select.SelectOptionAsync(value, new LocatorSelectOptionOptions { Timeout = 5000 });
+                    else
+                        await select.SelectOptionAsync(new[] { new SelectOptionValue { Label = label } },
+                            new LocatorSelectOptionOptions { Timeout = 5000 });
+                    await Task.Delay(500, cancellationToken);
+                    if (await IsIdentityFormReadyAsync()) return;
+                }
+            }
+        }
+
+        // Other versions render the choice as a tab, radio card, button, or clickable
+        // container with a nested text node. Match the visible Persian text after normalizing
+        // Arabic/Persian letters and whitespace, then click the nearest actionable ancestor.
         var clicked = false;
         foreach (var frame in _page!.Frames)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                clicked = await frame.EvaluateAsync<bool>("""
+                var result = await frame.EvaluateAsync<string>("""
                     () => {
-                    const norm = s => (s || '').normalize('NFKC')
-                      .replace(/[\s\u200c\u200f\u0640]/g, '')
-                      .replace(/[ي]/g, 'ی').replace(/[ك]/g, 'ک');
-                    const nodes = [...document.querySelectorAll('[role=tab],button,[role=button],a,label,[tabindex]')];
-                    const target = nodes.find(el => {
-                      const text = norm(el.innerText || el.textContent || el.getAttribute('aria-label'));
-                      const visible = !!(el.getClientRects().length) && getComputedStyle(el).visibility !== 'hidden';
-                      return visible && text === 'اتباع' && !el.disabled;
-                    });
-                    if (!target) return false;
-                    const actionable = target.closest('[role=tab],button,[role=button],a,label') || target;
-                    actionable.click();
-                    return true;
+                      const norm = s => (s || '').normalize('NFKC')
+                        .replace(/[\s\u200c\u200f\u0640]/g, '')
+                        .replace(/[ي]/g, 'ی').replace(/[ك]/g, 'ک');
+                      const visible = el => {
+                        if (!el || !el.getClientRects().length) return false;
+                        const style = getComputedStyle(el);
+                        return style.visibility !== 'hidden' && style.display !== 'none' &&
+                          style.opacity !== '0' && !el.closest('[aria-hidden="true"]');
+                      };
+                      const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span,input[type=radio]';
+                      const candidates = [...document.querySelectorAll(selector)]
+                        .filter(el => visible(el))
+                        .map(el => {
+                          const label = [
+                            el.innerText, el.textContent, el.getAttribute('aria-label'),
+                            el.getAttribute('title'), el.value,
+                            el.closest('label')?.innerText
+                          ].filter(Boolean).join(' ');
+                          return { el, text: norm(label) };
+                        })
+                        .filter(x => x.text.includes('اتباع') && x.text.length <= 100)
+                        .sort((a,b) => {
+                          const pa = a.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],input[type=radio]') ? 0 : 1;
+                          const pb = b.el.matches('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],input[type=radio]') ? 0 : 1;
+                          return pa - pb || a.text.length - b.text.length;
+                        });
+                      if (!candidates.length) return 'not-found';
+                      const chosen = candidates[0].el;
+                      const actionable = chosen.closest('button,[role=tab],[role=button],[role=radio],a,label,[tabindex],li') ||
+                        chosen.closest('div') || chosen;
+                      const selected = actionable.getAttribute('aria-selected') === 'true' ||
+                        actionable.getAttribute('aria-checked') === 'true' ||
+                        actionable.getAttribute('aria-pressed') === 'true' ||
+                        actionable.checked === true ||
+                        /(^|\s)(active|selected|checked)(\s|$)/i.test(actionable.className?.toString() || '');
+                      if (selected) return 'already-selected';
+                      actionable.scrollIntoView({ block: 'center', inline: 'center' });
+                      actionable.click();
+                      return 'clicked';
+                    }
+                    """);
+                if (result == "clicked" || result == "already-selected")
+                {
+                    clicked = true;
+                    break;
                 }
-                """
-                );
             }
-            catch { clicked = false; }
-            if (clicked) break;
+            catch
+            {
+                // Continue searching other frames; the diagnostic below explains what remained visible.
+            }
         }
 
         if (!clicked && !await IsIdentityFormReadyAsync())
             throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync(
-                "گزینه قابل کلیک «اتباع» پیدا نشد و فرم اتباع نیز نمایش داده نشده است."));
+                "گزینه «اتباع» در کنترل‌های قابل مشاهده پیدا نشد و فرم اتباع نیز نمایش داده نشده است."));
 
         var started = DateTime.UtcNow;
         while (DateTime.UtcNow - started < TimeSpan.FromSeconds(60))
@@ -463,26 +542,20 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             await Task.Delay(400, cancellationToken);
         }
         throw new TimeoutException(await BuildRegistrationDiagnosticAsync(
-            "پس از انتخاب «اتباع»، فیلدهای شناسه یکتا و کد فیدا در صفحه ظاهر نشدند."));
+            "پس از انتخاب «اتباع»، کادرهای شناسه یکتا و کد فیدا در صفحه ظاهر نشدند."));
     }
 
     private async Task<bool> IsIdentityFormReadyAsync()
     {
-        // Use the actual visible field labels/placeholders, not page text alone: hidden
-        // templates and inactive tabs can contain the same Persian words.
-        const string selector = "input:visible, textarea:visible, [contenteditable='true']:visible, [role='textbox']:visible";
-        var first = await FindByDescriptionAsync(selector,
-            new[] { "شناسه یکتا", "شناسه‌یکتا", "شماره گذرنامه", "شماره فراگیر", "shenasaeiCode", "passportCode" });
-        var second = await FindByDescriptionAsync(selector,
-            new[] { "کد فیدا", "کدفیدا", "fidaCode", "fida-code" });
-        if (first is not null && second is not null) return true;
-
-        var body = NormalizeForMatch(await ReadBodyTextSafelyAsync());
         var editable = await GetEditableInputsAsync();
-        return body.Contains(NormalizeForMatch("کد فیدا"), StringComparison.Ordinal) &&
-               (body.Contains(NormalizeForMatch("شناسه یکتا"), StringComparison.Ordinal) ||
-                body.Contains(NormalizeForMatch("شماره گذرنامه"), StringComparison.Ordinal)) &&
-               editable.Count >= 2;
+        var used = new HashSet<int>();
+        var first = await FindIdentityInputAsync(editable, used,
+            new[] { "shenasaeiCode", "passportCode", "شناسه یکتا", "شناسه", "یکتا", "گذرنامه", "فراگیر", "passport", "unique" });
+        if (first.Locator is null) return false;
+        used.Add(first.Index);
+        var second = await FindIdentityInputAsync(editable, used,
+            new[] { "fidaCode", "کد فیدا", "فیدا", "fida" });
+        return second.Locator is not null;
     }
 
     private async Task<string> BuildRegistrationDiagnosticAsync(string reason)
@@ -842,6 +915,54 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         if (!IsOpen) throw new InvalidOperationException("ابتدا دکمه «باز کردن Chrome» را بزنید.");
     }
 
+    private async Task<(ILocator? Locator, int Index)> FindIdentityInputAsync(
+        List<InputCandidate> candidates, HashSet<int> excluded, string[] tokens)
+    {
+        var ranked = new List<(ILocator Locator, int Index, int Score)>();
+        var normalizedTokens = tokens.Select(NormalizeForMatch).Where(t => t.Length > 0).ToArray();
+        for (var i = 0; i < candidates.Count; i++)
+        {
+            if (excluded.Contains(i)) continue;
+            var parts = (await DescribeIdentityFieldAsync(candidates[i].Locator)).Split('\u001f');
+            var direct = parts.Length > 0 ? NormalizeForMatch(parts[0]) : "";
+            var nearby = parts.Length > 1 ? NormalizeForMatch(parts[1]) : "";
+            var directMatch = normalizedTokens.Any(t => direct.Contains(t, StringComparison.Ordinal));
+            var nearbyMatch = normalizedTokens.Any(t => nearby.Contains(t, StringComparison.Ordinal));
+            var score = directMatch ? 100 : nearbyMatch ? 20 : 0;
+            if (score > 0) ranked.Add((candidates[i].Locator, i, score));
+        }
+
+        if (ranked.Count == 0) return (null, -1);
+        var bestScore = ranked.Max(x => x.Score);
+        var best = ranked.Where(x => x.Score == bestScore).ToList();
+        // Ambiguous labels are safer to report than to guess between two inputs.
+        if (best.Count != 1) return (null, -1);
+        return (best[0].Locator, best[0].Index);
+    }
+
+    private static async Task<string> DescribeIdentityFieldAsync(ILocator locator)
+    {
+        return await locator.EvaluateAsync<string>("""
+            el => {
+              const texts = nodes => nodes.map(n => n?.innerText || n?.textContent || '').filter(Boolean).join(' ');
+              const direct = [
+                el.getAttribute('placeholder'), el.getAttribute('name'), el.id,
+                el.getAttribute('aria-label'), el.getAttribute('title'),
+                el.getAttribute('data-testid'), el.getAttribute('autocomplete'),
+                texts(el.labels ? [...el.labels] : []),
+                texts((el.getAttribute('aria-labelledby') || '').split(/\\s+/).map(id => document.getElementById(id))),
+                el.closest('label')?.innerText,
+                el.previousElementSibling?.innerText
+              ].filter(Boolean).join(' ');
+              const parentText = el.parentElement?.innerText || '';
+              const grandText = el.parentElement?.parentElement?.innerText || '';
+              const nearby = [parentText.length <= 140 ? parentText : '',
+                              grandText.length <= 90 ? grandText : ''].filter(Boolean).join(' ');
+              return direct + '\u001f' + nearby;
+            }
+            """);
+    }
+
     private async Task<ILocator?> FindByDescriptionAsync(string selector, string[] tokens)
     {
         RequirePage();
@@ -1062,6 +1183,9 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             '٥' => '5', '٦' => '6', '٧' => '7', '٨' => '8', '٩' => '9',
             _ => c
         }).ToArray());
+
+    private static string NormalizeDigitsExact(string value)
+        => ToAsciiDigits(value).Trim();
 
     private static string NormalizeNumber(string value)
     {
