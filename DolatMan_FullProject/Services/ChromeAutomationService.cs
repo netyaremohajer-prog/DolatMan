@@ -529,11 +529,13 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                                   hasSelectedClass(cls))
                                 return true;
                               const radio = node.matches?.('input[type=radio]') ? node :
-                                node.querySelector?.('input[type=radio]');
+                                (node.querySelector?.('input[type=radio]') ||
+                                 (node.matches?.('label[for]') ? document.getElementById(node.getAttribute('for')) : null));
                               if (radio?.checked) return true;
                             }
                             const radio = el.matches?.('input[type=radio]') ? el :
-                              el.closest('label')?.querySelector('input[type=radio]');
+                              (el.closest('label')?.querySelector('input[type=radio]') ||
+                               (el.matches?.('label[for]') ? document.getElementById(el.getAttribute('for')) : null));
                             return radio?.checked === true;
                           };
 
@@ -559,7 +561,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                             }
                           }
 
-                          const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
+                          const selector = 'input[type=radio],[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
                           const candidates = [...document.querySelectorAll(selector)]
                             .filter(el => visible(el))
                             .map(el => ({ el, text: describes(el) }))
@@ -669,7 +671,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                             [...select.options].some(o => norm(o.label || o.textContent).includes('اتباع')))
                           return true;
                       }
-                      const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
+                      const selector = 'input[type=radio],[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
                       return [...document.querySelectorAll(selector)].some(el => {
                         if (!isVisible(el)) return false;
                         const label = norm([
@@ -726,11 +728,13 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                               hasSelectedClass(cls))
                             return true;
                           const radio = node.matches?.('input[type=radio]') ? node :
-                            node.querySelector?.('input[type=radio]');
+                            (node.querySelector?.('input[type=radio]') ||
+                             (node.matches?.('label[for]') ? document.getElementById(node.getAttribute('for')) : null));
                           if (radio?.checked) return true;
                         }
                         const radio = el.matches?.('input[type=radio]') ? el :
-                          el.closest('label')?.querySelector('input[type=radio]');
+                          (el.closest('label')?.querySelector('input[type=radio]') ||
+                           (el.matches?.('label[for]') ? document.getElementById(el.getAttribute('for')) : null));
                         return radio?.checked === true;
                       };
                       for (const select of document.querySelectorAll('select')) {
@@ -738,7 +742,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                             [...select.selectedOptions].some(o => norm(o.label || o.textContent).includes('اتباع')))
                           return true;
                       }
-                      const selector = '[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
+                      const selector = 'input[type=radio],[role=tab],button,[role=button],[role=radio],a,label,[tabindex],li,div,span';
                       return [...document.querySelectorAll(selector)].some(el => {
                         if (!visible(el)) return false;
                         const label = norm([
