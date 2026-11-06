@@ -90,6 +90,9 @@ Console.WriteLine("PASS: split OTP boxes auto-verify on the final digit without 
 await RunOtpNavigationRegressionAsync();
 Console.WriteLine("PASS: OTP entry stops touching digit locators after automatic navigation.");
 
+await RunOtpDoesNotOverwriteNationalIdRegressionAsync();
+Console.WriteLine("PASS: OTP code is never typed into the lone national-ID input on /register.");
+
 await RunIdentityFieldsAndCustomDateRegressionAsync();
 Console.WriteLine("PASS: sibling FIDA label and custom Jalali day/month/year dropdowns.");
 
@@ -219,7 +222,7 @@ static async Task RunOtpAutoVerifyRegressionAsync(bool singleInput)
             "EnterOtpForAutomaticVerificationAsync",
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("Automatic OTP entry method was not found.");
-        var task = method.Invoke(service, new object[] { "123456" }) as Task
+        var task = method.Invoke(service, new object[] { "123456", new Progress<string>(_ => { }) }) as Task
             ?? throw new InvalidOperationException("Automatic OTP method did not return a Task.");
         await task;
 
@@ -318,6 +321,77 @@ static async Task RunOtpNavigationRegressionAsync()
             throw new InvalidOperationException($"Expected automatic navigation to /register, got '{page.Url}'.");
         if (await page.Locator("input[maxlength='1']").CountAsync() != 0)
             throw new InvalidOperationException("OTP fields should have been removed after navigation.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
+static async Task RunOtpDoesNotOverwriteNationalIdRegressionAsync()
+{
+    const string html = """
+        <!doctype html><html lang="fa" dir="rtl"><body>
+          <div>درگاه یکپارچه احراز هویت</div>
+          <div>اتباع</div><div>ایرانی</div>
+          <div>تاریخ تولد</div><div>کد فیدا</div>
+          <form id="register-iranian-form">
+            <input id="national-id" type="text" placeholder="کد ملی" value="">
+            <input id="birth-date-iranian" type="hidden" value="">
+          </form>
+          <form id="register-foreigner-form" style="display:none">
+            <input id="passport-code" type="text" placeholder="شماره گذرنامه/شناسه یکتا">
+            <input id="shenasaei-code" type="text" placeholder="کد فیدا">
+          </form>
+        </body></html>
+        """;
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+    var context = await browser.NewContextAsync();
+    await context.RouteAsync("**/*", route => route.FulfillAsync(new RouteFulfillOptions
+    {
+        Status = 200,
+        ContentType = "text/html; charset=utf-8",
+        Body = html
+    }));
+    var page = await context.NewPageAsync();
+    await page.GotoAsync(ChromeAutomationService.RegisterUrl);
+
+    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", page);
+
+    try
+    {
+        var method = typeof(ChromeAutomationService).GetMethod(
+            "EnterOtpForAutomaticVerificationAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Automatic OTP entry method was not found.");
+
+        var task = method.Invoke(service, new object[]
+            { "123456", new Progress<string>(_ => { }) }) as Task
+            ?? throw new InvalidOperationException("Automatic OTP method did not return a Task.");
+
+        try
+        {
+            await task;
+            throw new InvalidOperationException(
+                "The OTP method must reject a registration page that has no OTP input.");
+        }
+        catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException)
+        {
+            // Expected: no OTP field means the code must not be typed into national-id.
+        }
+        catch (InvalidOperationException)
+        {
+            // Expected: async reflection may surface the method exception directly.
+        }
+
+        var nationalId = await page.Locator("#national-id").InputValueAsync();
+        if (nationalId.Length != 0)
+            throw new InvalidOperationException(
+                $"The OTP code was incorrectly entered into the national-ID field: '{nationalId}'.");
     }
     finally
     {
