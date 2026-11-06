@@ -284,7 +284,7 @@
                         <Border Style="{StaticResource Card}" Margin="0,0,0,14">
                             <StackPanel>
                                 <TextBlock Text="فقط دو توقف امنیتی" FontSize="15" FontWeight="Bold" Foreground="#A46B22"/>
-                                <TextBlock Text="۱) کد امنیتی تصویری را از Chrome می‌خوانید و در پنجره DolatMan وارد می‌کنید؛ برنامه آن را رقم‌به‌رقم تایپ و ارسال می‌کند. ۲) کد پیامکی را در پنجره DolatMan وارد می‌کنید؛ برنامه آن را در فرم رسمی Chrome رقم‌به‌رقم تایپ و تأیید می‌کند. کدها ذخیره نمی‌شوند." TextWrapping="Wrap" Foreground="#77869A" FontSize="12" Margin="0,8,0,0"/>
+                                <TextBlock Text="۱) کد امنیتی تصویری را از Chrome می‌خوانید و در پنجره DolatMan وارد می‌کنید؛ برنامه آن را رقم‌به‌رقم تایپ و ارسال می‌کند. ۲) کد پیامکی را در پنجره DolatMan وارد می‌کنید؛ برنامه آن را در فرم رسمی Chrome رقم‌به‌رقم تایپ می‌کند و سامانه باید به‌صورت خودکار آن را بررسی کند؛ دکمه تأیید جداگانه‌ای زده نمی‌شود. کدها ذخیره نمی‌شوند." TextWrapping="Wrap" Foreground="#77869A" FontSize="12" Margin="0,8,0,0"/>
                             </StackPanel>
                         </Border>
 
