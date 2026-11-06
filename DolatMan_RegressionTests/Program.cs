@@ -93,6 +93,9 @@ Console.WriteLine("PASS: OTP entry stops touching digit locators after automatic
 await RunOtpDoesNotOverwriteNationalIdRegressionAsync();
 Console.WriteLine("PASS: OTP code is never typed into the lone national-ID input on /register.");
 
+await RunOtpSkipsTypingWhenSsoAlreadyOpenedRegisterTabAsync();
+Console.WriteLine("PASS: after SMS request, an already-open SSO /register tab is adopted before OTP field lookup.");
+
 await RunIdentityFieldsAndCustomDateRegressionAsync();
 Console.WriteLine("PASS: sibling FIDA label and custom Jalali day/month/year dropdowns.");
 
@@ -391,6 +394,78 @@ static async Task RunOtpDoesNotOverwriteNationalIdRegressionAsync()
         if (nationalId.Length != 0)
             throw new InvalidOperationException(
                 $"The OTP code was incorrectly entered into the national-ID field: '{nationalId}'.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
+static async Task RunOtpSkipsTypingWhenSsoAlreadyOpenedRegisterTabAsync()
+{
+    const string loginHtml = """
+        <!doctype html><html lang="fa" dir="rtl"><body>
+          <label for="otp">کد پیامکی</label>
+          <input id="otp" name="otp" autocomplete="one-time-code" maxlength="6">
+        </body></html>
+        """;
+    const string registerHtml = """
+        <!doctype html><html lang="fa" dir="rtl"><body>
+          <h1>درگاه یکپارچه احراز هویت</h1>
+          <div id="foreigner-btn">اتباع</div>
+          <div id="iranian-btn">ایرانی</div>
+          <div>جهت ورود به سامانه و دسترسی به خدمات کد ملی و تاریخ تولد</div>
+          <form id="register-iranian-form">
+            <input id="national-id" placeholder="کد ملی">
+            <div>روز ماه سال تولد</div>
+          </form>
+          <div>کد فیدا</div>
+        </body></html>
+        """;
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+    var context = await browser.NewContextAsync();
+    await context.RouteAsync("**/*", async route =>
+    {
+        var body = route.Request.Url.Contains("/register", StringComparison.OrdinalIgnoreCase)
+            ? registerHtml : loginHtml;
+        await route.FulfillAsync(new RouteFulfillOptions
+        {
+            Status = 200,
+            ContentType = "text/html; charset=utf-8",
+            Body = body
+        });
+    });
+
+    var loginPage = await context.NewPageAsync();
+    await loginPage.GotoAsync(ChromeAutomationService.LoginUrl);
+    var registerPage = await context.NewPageAsync();
+    await registerPage.GotoAsync(ChromeAutomationService.RegisterUrl);
+
+    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", loginPage);
+    SetPrivateField(service, "_otpRequestPending", true);
+
+    try
+    {
+        var method = typeof(ChromeAutomationService).GetMethod(
+            "EnterOtpForAutomaticVerificationAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("OTP entry method was not found.");
+        var task = method.Invoke(service, new object[]
+            { "123456", new Progress<string>(_ => { }) }) as Task
+            ?? throw new InvalidOperationException("OTP entry method did not return a Task.");
+
+        await task;
+
+        if (!service.CurrentUrl.EndsWith("/register", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException($"Expected /register tab to be adopted, got '{service.CurrentUrl}'.");
+        if ((await registerPage.Locator("#national-id").InputValueAsync()).Length != 0)
+            throw new InvalidOperationException("The SMS code must not be typed into national-ID.");
+        if ((await loginPage.Locator("#otp").InputValueAsync()).Length != 0)
+            throw new InvalidOperationException("The stale login tab should not receive an OTP after registration tab is already open.");
     }
     finally
     {
