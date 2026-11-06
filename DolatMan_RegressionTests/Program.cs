@@ -93,6 +93,9 @@ Console.WriteLine("PASS: OTP entry stops touching digit locators after automatic
 await RunIdentityFieldsAndCustomDateRegressionAsync();
 Console.WriteLine("PASS: sibling FIDA label and custom Jalali day/month/year dropdowns.");
 
+await RunOfficialPortalMarkupRegressionAsync();
+Console.WriteLine("PASS: exact sso.my.gov.ir foreigners tab, identity fields and birth-date picker markup.");
+
 await RunAuthenticatedSecondTabRegressionAsync();
 Console.WriteLine("PASS: automation adopts the authenticated SSO registration tab opened after OTP.");
 
@@ -341,11 +344,12 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
               <input id="fida" type="text" autocomplete="off">
             </div>
           </section>
-          <section id="birth-date">
+          <section id="date-picker-foreigner" data-input="birthDate">
             <div id="day" class="custom-dropdown"><span>روز</span></div>
             <div id="month" class="custom-dropdown"><span>ماه</span></div>
             <div id="year" class="custom-dropdown"><span>سال تولد</span></div>
           </section>
+          <input id="birth-date-foreigner" name="birthDate" type="hidden" value="">
           <script>
             const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور',
                                 'مهر','آبان','آذر','دی','بهمن','اسفند'];
@@ -365,6 +369,10 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
                 option.addEventListener('click', () => {
                   document.querySelector('#'+name+' span').textContent = label;
                   list.remove();
+                  const parts = ['day','month','year'].map(id => document.querySelector('#'+id+' span').textContent.trim());
+                  if (parts[0] !== 'روز' && parts[1] !== 'ماه' && parts[2] !== 'سال تولد') {
+                    document.querySelector('#birth-date-foreigner').value = parts.join('/');
+                  }
                 });
                 list.appendChild(option);
               }
@@ -387,7 +395,8 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
         Body = html
     }));
     var page = await context.NewPageAsync();
-    await page.GotoAsync(ChromeAutomationService.RegisterUrl);    var service = new ChromeAutomationService();
+    await page.GotoAsync(ChromeAutomationService.RegisterUrl);
+    var service = new ChromeAutomationService();
     SetPrivateField(service, "_context", context);
     SetPrivateField(service, "_page", page);
 
@@ -417,6 +426,158 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
         if (selectedDay != "15" || selectedMonth != "اردیبهشت" || selectedYear != "1370")
             throw new InvalidOperationException(
                 $"Jalali date mismatch. Got {selectedDay}/{selectedMonth}/{selectedYear}.");
+    }
+    finally
+    {
+        await service.DisposeAsync();
+    }
+}
+
+static async Task RunOfficialPortalMarkupRegressionAsync()
+{
+    const string html = """
+        <!doctype html>
+        <html lang="fa" dir="rtl">
+        <head>
+          <style>
+            form.hidden { display: none !important; }
+            .custom-select-wrapper { position: relative; width: 110px; height: 42px; }
+            .custom-select { width: 100%; height: 100%; cursor: pointer; position: relative; }
+            .custom-select > div:first-child { cursor: pointer; width: 100%; height: 100%; }
+            .select-options { display: none; position: absolute; top: 100%; left: 0; z-index: 10; background: white; }
+            .select-options.active { display: block; }
+            .select-option { cursor: pointer; padding: 4px; }
+          </style>
+        </head>
+        <body>
+          <div id="iranian-btn" data-selected="true">ایرانی</div>
+          <div id="foreigner-btn" data-selected="false">اتباع</div>
+
+          <form id="register-iranian-form">
+            <input id="national-id" name="nationalId" placeholder="کد ملی">
+            <div id="date-picker-iranian"></div>
+            <input id="birth-date-iranian" name="birthDate" type="hidden" value="">
+            <input name="iranian" type="hidden" value="true">
+          </form>
+
+          <form id="register-foreigner-form" class="hidden">
+            <input id="passport-code" name="passPortCode" maxlength="12"
+                   placeholder="شماره گذرنامه/ فراگیر ناجا/ شناسه یکتا">
+            <input id="shenasaei-code" name="shenasaeiCode" maxlength="12"
+                   placeholder="کد فیدا">
+            <div id="date-picker-foreigner" data-input="birthDate">
+              <div class="custom-select-wrapper">
+                <div id="day-control" class="custom-select">
+                  <div class="placeholder">روز</div>
+                  <div class="select-options">
+                    <div class="select-option">15</div>
+                  </div>
+                </div>
+              </div>
+              <div class="custom-select-wrapper">
+                <div id="month-control" class="custom-select">
+                  <div class="placeholder">ماه</div>
+                  <div class="select-options">
+                    <div class="select-option">فروردین</div>
+                    <div class="select-option">اردیبهشت</div>
+                  </div>
+                </div>
+              </div>
+              <div class="custom-select-wrapper">
+                <div id="year-control" class="custom-select">
+                  <div class="placeholder">سال تولد</div>
+                  <div class="select-options">
+                    <div class="select-option">1370</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <input id="birth-date-foreigner" name="birthDate" type="hidden" value="">
+            <input name="iranian" type="hidden" value="false">
+          </form>
+
+          <script>
+            document.querySelectorAll('#date-picker-foreigner .custom-select').forEach(control => {
+              const trigger = control.querySelector('.placeholder');
+              trigger.addEventListener('click', () => {
+                control.querySelector('.select-options').classList.add('active');
+              });
+              control.querySelectorAll('.select-option').forEach(option => option.addEventListener('click', () => {
+                trigger.textContent = option.textContent.trim();
+                control.querySelector('.select-options').classList.remove('active');
+                const values = [...document.querySelectorAll('#date-picker-foreigner .placeholder')].map(x => x.textContent.trim());
+                if (values.every(x => x && !['روز','ماه','سال تولد'].includes(x))) {
+                  document.getElementById('birth-date-foreigner').value = values.join('/');
+                  document.getElementById('birth-date-foreigner').dispatchEvent(new Event('input', { bubbles: true }));
+                  document.getElementById('birth-date-foreigner').dispatchEvent(new Event('change', { bubbles: true }));
+                }
+              }));
+            });
+
+            document.getElementById('foreigner-btn').addEventListener('click', () => {
+              document.getElementById('foreigner-btn').setAttribute('data-selected', 'true');
+              document.getElementById('iranian-btn').setAttribute('data-selected', 'false');
+              document.getElementById('register-iranian-form').classList.add('hidden');
+              document.getElementById('register-foreigner-form').classList.remove('hidden');
+            });
+          </script>
+        </body>
+        </html>
+        """;
+
+    using var playwright = await Playwright.CreateAsync();
+    await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+    var context = await browser.NewContextAsync();
+    await context.RouteAsync("**/*", route => route.FulfillAsync(new RouteFulfillOptions
+    {
+        Status = 200,
+        ContentType = "text/html; charset=utf-8",
+        Body = html
+    }));
+    var page = await context.NewPageAsync();
+    await page.GotoAsync(ChromeAutomationService.RegisterUrl);
+
+    var service = new ChromeAutomationService();
+    SetPrivateField(service, "_context", context);
+    SetPrivateField(service, "_page", page);
+
+    try
+    {
+        var openMethod = typeof(ChromeAutomationService).GetMethod(
+            "OpenRegistrationForQueueAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new InvalidOperationException("Registration selection method was not found.");
+        var openTask = openMethod.Invoke(service, new object[] { CancellationToken.None }) as Task
+            ?? throw new InvalidOperationException("Registration selection did not return a Task.");
+        await openTask;
+
+        if (await page.Locator("#foreigner-btn").GetAttributeAsync("data-selected") != "true")
+            throw new InvalidOperationException("The exact official foreigners tab did not become selected.");
+        if (!await page.Locator("#register-foreigner-form").IsVisibleAsync() ||
+            await page.Locator("#register-iranian-form").IsVisibleAsync())
+            throw new InvalidOperationException("The portal did not switch from Iranian form to foreigners form.");
+
+        var applicant = new Applicant
+        {
+            FullName = "Portal HTML Regression",
+            UniqueId = "300012345678",
+            FidaCode = "123456789012",
+            BirthDate = "15/02/1370",
+            MappingIndex = 0
+        };
+
+        await service.FillIdentityFormAsync(applicant, 0);
+
+        var actualUnique = await page.Locator("#passport-code").InputValueAsync();
+        var actualFida = await page.Locator("#shenasaei-code").InputValueAsync();
+        if (actualUnique != applicant.UniqueId || actualFida != applicant.FidaCode)
+            throw new InvalidOperationException(
+                $"Official identity fields mismatch. Passport/unique='{actualUnique}', FIDA='{actualFida}'.");
+
+        var actualBirthDate = await page.Locator("#birth-date-foreigner").InputValueAsync();
+        if (actualBirthDate != "15/اردیبهشت/1370")
+            throw new InvalidOperationException(
+                $"Official hidden birth date mismatch. Expected 15/اردیبهشت/1370, got '{actualBirthDate}'.");
     }
     finally
     {
