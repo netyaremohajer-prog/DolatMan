@@ -344,11 +344,12 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
               <input id="fida" type="text" autocomplete="off">
             </div>
           </section>
-          <section id="birth-date">
+          <section id="date-picker-foreigner" data-input="birthDate">
             <div id="day" class="custom-dropdown"><span>روز</span></div>
             <div id="month" class="custom-dropdown"><span>ماه</span></div>
             <div id="year" class="custom-dropdown"><span>سال تولد</span></div>
           </section>
+          <input id="birth-date-foreigner" name="birthDate" type="hidden" value="">
           <script>
             const monthNames = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور',
                                 'مهر','آبان','آذر','دی','بهمن','اسفند'];
@@ -368,6 +369,10 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
                 option.addEventListener('click', () => {
                   document.querySelector('#'+name+' span').textContent = label;
                   list.remove();
+                  const parts = ['day','month','year'].map(id => document.querySelector('#'+id+' span').textContent.trim());
+                  if (parts[0] !== 'روز' && parts[1] !== 'ماه' && parts[2] !== 'سال تولد') {
+                    document.querySelector('#birth-date-foreigner').value = parts.join('/');
+                  }
                 });
                 list.appendChild(option);
               }
@@ -390,7 +395,8 @@ static async Task RunIdentityFieldsAndCustomDateRegressionAsync()
         Body = html
     }));
     var page = await context.NewPageAsync();
-    await page.GotoAsync(ChromeAutomationService.RegisterUrl);    var service = new ChromeAutomationService();
+    await page.GotoAsync(ChromeAutomationService.RegisterUrl);
+    var service = new ChromeAutomationService();
     SetPrivateField(service, "_context", context);
     SetPrivateField(service, "_page", page);
 
