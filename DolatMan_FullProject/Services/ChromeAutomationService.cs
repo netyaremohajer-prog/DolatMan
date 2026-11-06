@@ -1752,7 +1752,15 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                 $"انتخاب تاریخ تولد در فهرست کشویی «{failed}» تأیید نشد؛ برای جلوگیری از ثبت تاریخ اشتباه، فرم ارسال نشد.");
         }
 
-        return $"تاریخ تولد {day}/{month}/{year} در فهرست‌های کشویی انتخاب و کنترل شد.";
+        // The official page submits birthDate through this hidden field, not the visible
+        // option captions. Verify the datepicker actually propagated its final value.
+        var hiddenBirthDate = _page!.Locator("#birth-date-foreigner");
+        if (await hiddenBirthDate.CountAsync() != 1 ||
+            string.IsNullOrWhiteSpace(await hiddenBirthDate.InputValueAsync()))
+            throw new InvalidOperationException(
+                "روز، ماه و سال انتخاب شدند اما مقدار نهایی تاریخ در فیلد مخفی سامانه ثبت نشد؛ فرم ارسال نشد.");
+
+        return $"تاریخ تولد {day}/{month}/{year} انتخاب شد و مقدار نهایی سامانه کنترل شد.";
     }
 
     private async Task<(IFrame? Frame, ILocator? Locator)> FindDateControlAsync(string field)
@@ -1767,7 +1775,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
                     + "const norm=s=>(s||'').normalize('NFKC').replace(/[\\s\\u200c\\u200f\\u0640]/g,'').replace(/[ي]/g,'ی').replace(/[ك]/g,'ک').toLowerCase();"
                     + "const visible=el=>{if(!el||!el.getClientRects().length)return false;const st=getComputedStyle(el);return st.display!=='none'&&st.visibility!=='hidden'&&st.opacity!=='0'&&!el.closest('[aria-hidden=true]');};"
                     + "const selector='input,select,button,[role=combobox],[role=button],[aria-haspopup],[aria-expanded],[tabindex],[class*=select],[class*=Select],[class*=dropdown],[class*=Dropdown],div,span';"
-                    + "const candidates=[...document.querySelectorAll(selector)].filter(visible).map(el=>{"
+                    + "const picker=document.querySelector('#date-picker-foreigner');if(!picker)return false;"
+                    + "const candidates=[...picker.querySelectorAll(selector)].filter(visible).map(el=>{"
                     + "const own=(el.innerText||el.textContent||'').trim();"
                     + "const attrs=[el.getAttribute('placeholder'),el.getAttribute('name'),el.id,el.getAttribute('aria-label'),el.getAttribute('title'),el.getAttribute('data-testid'),el.getAttribute('class')].filter(Boolean).join(' ');"
                     + "const siblings=[el.previousElementSibling?.innerText,el.nextElementSibling?.innerText].filter(Boolean).join(' ');"
