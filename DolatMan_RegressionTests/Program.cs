@@ -313,7 +313,7 @@ static async Task RunOtpNavigationRegressionAsync()
             "EnterOtpForAutomaticVerificationAsync",
             BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new InvalidOperationException("Automatic OTP entry method was not found.");
-        var task = method.Invoke(service, new object[] { "123456" }) as Task
+        var task = method.Invoke(service, new object[] { "123456", new Progress<string>(_ => { }) }) as Task
             ?? throw new InvalidOperationException("Automatic OTP method did not return a Task.");
         await task;
 
@@ -373,20 +373,19 @@ static async Task RunOtpDoesNotOverwriteNationalIdRegressionAsync()
             { "123456", new Progress<string>(_ => { }) }) as Task
             ?? throw new InvalidOperationException("Automatic OTP method did not return a Task.");
 
+        var rejected = false;
         try
         {
             await task;
-            throw new InvalidOperationException(
-                "The OTP method must reject a registration page that has no OTP input.");
-        }
-        catch (TargetInvocationException ex) when (ex.InnerException is InvalidOperationException)
-        {
-            // Expected: no OTP field means the code must not be typed into national-id.
         }
         catch (InvalidOperationException)
         {
-            // Expected: async reflection may surface the method exception directly.
+            rejected = true;
         }
+
+        if (!rejected)
+            throw new InvalidOperationException(
+                "The OTP method should reject a registration page that has no OTP input.");
 
         var nationalId = await page.Locator("#national-id").InputValueAsync();
         if (nationalId.Length != 0)
