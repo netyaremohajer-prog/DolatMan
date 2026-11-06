@@ -17,6 +17,7 @@ public partial class MainWindow : Window
     private readonly ChromeAutomationService _chrome = new();
     private Applicant? _editingApplicant;
     private bool _isClosing;
+    private bool _storageLoadFailed;
     private CancellationTokenSource? _queueCancellation;
     private Applicant? _queueCurrentApplicant;
 
@@ -52,8 +53,11 @@ public partial class MainWindow : Window
         }
         catch (Exception ex)
         {
-            MessageBox.Show(ex.Message, "خطا در خواندن اطلاعات", MessageBoxButton.OK, MessageBoxImage.Error);
-            SetStatus("خواندن پرونده‌های ذخیره‌شده ناموفق بود.");
+            // Never allow a later Save to replace an existing file that could not be decrypted/read.
+            _storageLoadFailed = true;
+            MessageBox.Show(ex.Message + "\n\nبرای جلوگیری از پاک شدن اطلاعات قبلی، ذخیره، حذف و اجرای صف تا زمان رفع مشکل غیرفعال است. از فایل applicants.dat یک نسخه پشتیبان بگیرید.",
+                "خطا در خواندن اطلاعات", MessageBoxButton.OK, MessageBoxImage.Error);
+            SetStatus("حافظه قبلی قابل خواندن نیست؛ عملیات نوشتن برای جلوگیری از ازدست‌رفتن اطلاعات مسدود شد.");
         }
     }
 
@@ -109,8 +113,18 @@ public partial class MainWindow : Window
     private void NavSettings_Click(object sender, RoutedEventArgs e)
         => SetSection("تنظیمات و حریم خصوصی", "محل ذخیره اطلاعات و نکات امنیتی", "settings");
 
+    private bool EnsureStorageWritable()
+    {
+        if (!_storageLoadFailed) return true;
+        MessageBox.Show(
+            "فایل اطلاعات قبلی قابل خواندن نیست. برای جلوگیری از بازنویسی و ازدست‌رفتن پرونده‌ها، ابتدا فایل applicants.dat را پشتیبان‌گیری و مشکل رمزگشایی یا دسترسی را برطرف کنید.",
+            "حافظه اطلاعات قفل است", MessageBoxButton.OK, MessageBoxImage.Error);
+        return false;
+    }
+
     private void SaveApplicant_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStorageWritable()) return;
         var name = NameBox.Text.Trim();
         var mobile = MobileBox.Text.Trim();
         var uniqueId = UniqueIdBox.Text.Trim();
@@ -206,6 +220,7 @@ public partial class MainWindow : Window
 
     private void DeleteApplicant_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStorageWritable()) return;
         if (ApplicantsGrid.SelectedItem is not Applicant selected)
         {
             MessageBox.Show("ابتدا یک متقاضی را از فهرست انتخاب کنید.", "انتخاب متقاضی",
@@ -237,6 +252,7 @@ public partial class MainWindow : Window
 
     private void ResetApplicantQueueStatus_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStorageWritable()) return;
         if (ApplicantsGrid.SelectedItem is not Applicant selected)
         {
             MessageBox.Show("ابتدا پرونده موردنظر را از فهرست انتخاب کنید.", "انتخاب متقاضی",
@@ -284,6 +300,7 @@ public partial class MainWindow : Window
 
     private async void StartQueue_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStorageWritable()) return;
         if (_queueCancellation is not null) return;
 
         // Only explicitly prepared records run automatically. Interrupted/failed records require
@@ -589,6 +606,7 @@ public partial class MainWindow : Window
 
     private async void FillIdentity_Click(object sender, RoutedEventArgs e)
     {
+        if (!EnsureStorageWritable()) return;
         var applicant = GetSelectedApplicant();
         if (applicant is null) return;
         var mapping = Math.Clamp(AutomationMappingCombo.SelectedIndex, 0, 2);
