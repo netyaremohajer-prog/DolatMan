@@ -513,7 +513,7 @@ public partial class MainWindow : Window
         var panel = new StackPanel { Margin = new Thickness(22) };
         panel.Children.Add(new TextBlock
         {
-            Text = "درخواست ارسال کد پیامکی از سامانه انجام شد. کدی را که برای شماره همراه همین متقاضی دریافت کرده‌اید وارد کنید.",
+            Text = "کد پیامکی همین متقاضی را وارد کنید و حتماً روی «تأیید و ادامه» بزنید. بعد از تأیید، DolatMan کد را فقط در کادر اختصاصی پیامک در Chrome وارد می‌کند؛ اگر آن کادر پیدا نشود، هیچ کادر هویتی را تغییر نمی‌دهد.",
             TextWrapping = TextWrapping.Wrap,
             FontSize = 14,
             Margin = new Thickness(0, 0, 0, 14),
