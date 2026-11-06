@@ -280,7 +280,8 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         var otp = await requestOtp();
         if (string.IsNullOrWhiteSpace(otp))
             throw new OperationCanceledException("ورود کد پیامکی لغو شد.", cancellationToken);
-        await EnterOtpForAutomaticVerificationAsync(otp.Trim());
+        progress.Report("کد پیامکی در پنجره DolatMan تأیید شد؛ در حال پیدا کردن کادر مخصوص کد در Chrome...");
+        await EnterOtpForAutomaticVerificationAsync(otp.Trim(), progress);
         progress.Report("کد پیامکی در فرم سامانه وارد شد؛ در حال بررسی نتیجه ورود...");
         await WaitForAuthenticatedPortalAsync(TimeSpan.FromSeconds(90), cancellationToken);
 
@@ -362,89 +363,84 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         await _page!.BringToFrontAsync();
     }
 
-    private async Task EnterOtpForAutomaticVerificationAsync(string otp)
+    private async Task EnterOtpForAutomaticVerificationAsync(string otp, IProgress<string> progress)
     {
         RequirePage();
         var code = ToAsciiDigits(otp.Trim());
         if (code.Length < 4 || code.Length > 8)
             throw new InvalidOperationException("کد پیامکی باید بین ۴ تا ۸ رقم باشد.");
 
-        async Task<bool> HasReachedAuthenticatedPageAsync()
-            => await TryAdoptAuthenticatedPortalPageAsync();
+        var originalPage = _page!;
+        var originalUrl = originalPage.Url;
+        progress.Report($"کد دریافت شد؛ در حال شناسایی کادر پیامکی در صفحه {originalUrl}...");
 
-        // Do not use a locator that can silently change from OTP boxes to unrelated
-        // one-character controls after the portal navigates. The official portal validates
-        // automatically on the last digit, and may navigate to /register during this loop.
-        var splitBoxes = _page!.Locator("input:visible[maxlength='1']");
+        async Task<bool> TryAcceptRedirectAfterTypingAsync()
+        {
+            // A public /register shell by itself is not proof that an OTP was typed.
+            // This check is only called after an OTP digit/control has actually been used.
+            if (_page is null || _page.IsClosed)
+                return await TryAdoptAuthenticatedPortalPageAsync();
+
+            if (!string.Equals(_page.Url, originalUrl, StringComparison.OrdinalIgnoreCase))
+                return await TryAdoptAuthenticatedPortalPageAsync();
+
+            return false;
+        }
+
+        // The portal may render one input per digit or one semantic OTP input.
+        var splitBoxes = originalPage.Locator("input:visible[maxlength='1']");
         var splitCount = await splitBoxes.CountAsync();
 
         if (splitCount >= code.Length)
         {
+            progress.Report($"کادرهای جداگانه کد پیامکی پیدا شدند؛ در حال وارد کردن {code.Length} رقم...");
             for (var i = 0; i < code.Length; i++)
             {
-                if (await HasReachedAuthenticatedPageAsync())
-                    return;
-
                 var currentCount = await splitBoxes.CountAsync();
                 if (currentCount <= i)
                 {
-                    if (await HasReachedAuthenticatedPageAsync())
+                    if (await TryAcceptRedirectAfterTypingAsync())
                         return;
 
                     throw new InvalidOperationException(
-                        $"کادر شماره {i + 1} کد پیامکی در صفحه ورود موجود نیست. " +
-                        "احتمالاً فرم سامانه تغییر کرده یا صفحه پیش از تکمیل کد جابه‌جا شده است؛ کد در فیلد دیگری وارد نشد.");
+                        $"کادر شماره {i + 1} کد پیامکی در صفحه ورود موجود نیست؛ کد به فیلد دیگری منتقل نشد.");
                 }
 
                 var box = splitBoxes.Nth(i);
                 try
                 {
                     if (!await box.IsVisibleAsync())
-                    {
-                        if (await HasReachedAuthenticatedPageAsync())
-                            return;
-
                         throw new InvalidOperationException($"کادر شماره {i + 1} کد پیامکی قابل مشاهده نیست.");
-                    }
 
                     await box.ClickAsync(new LocatorClickOptions { Timeout = 2500 });
                     await box.FillAsync(string.Empty, new LocatorFillOptions { Timeout = 2500 });
                     await box.PressSequentiallyAsync(
                         code[i].ToString(),
-                        new LocatorPressSequentiallyOptions { Timeout = 2500 });
+                        new LocatorPressSequentiallyOptions { Timeout = 3500 });
                 }
                 catch (PlaywrightException ex)
                 {
-                    if (await HasReachedAuthenticatedPageAsync())
+                    if (await TryAcceptRedirectAfterTypingAsync())
                         return;
 
                     throw new InvalidOperationException(
                         $"ورود رقم {i + 1} از کد پیامکی انجام نشد. صفحه Chrome را بررسی کنید. جزئیات: {ex.Message}", ex);
                 }
 
-                // If the last digit triggered automatic verification and navigation,
-                // stop touching the old OTP locators immediately.
-                if (await HasReachedAuthenticatedPageAsync())
+                progress.Report($"کد پیامکی در حال ورود است: رقم {i + 1} از {code.Length}...");
+                if (await TryAcceptRedirectAfterTypingAsync())
                     return;
             }
-
-            if (await HasReachedAuthenticatedPageAsync())
-                return;
 
             var entered = new System.Text.StringBuilder();
             try
             {
                 for (var i = 0; i < code.Length; i++)
-                {
-                    if (await HasReachedAuthenticatedPageAsync())
-                        return;
-
                     entered.Append(ToAsciiDigits(await splitBoxes.Nth(i).InputValueAsync()));
-                }
             }
             catch (PlaywrightException ex)
             {
-                if (await HasReachedAuthenticatedPageAsync())
+                if (await TryAcceptRedirectAfterTypingAsync())
                     return;
 
                 throw new InvalidOperationException("خواندن مقدار کد پیامکی برای کنترل نهایی ممکن نشد.", ex);
@@ -457,44 +453,73 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         {
             var selector = "input:visible, textarea:visible, [contenteditable='true']:visible, [role='textbox']:visible";
             var otpInput = await FindByDescriptionAsync(selector,
-                new[] { "کد تایید", "کد تأیید", "کد یکبار مصرف", "کد یک‌بار مصرف", "کد پیامکی", "otp", "verification", "one-time" });
+                new[] { "کد تایید", "کد تأیید", "کد یکبار مصرف", "کد یک‌بار مصرف", "کد پیامکی", "رمز یکبار مصرف", "رمز یک‌بار مصرف", "otp", "verification", "one-time" });
 
             if (otpInput is null)
             {
-                var candidates = await GetEditableInputsAsync();
-                var codeBoxes = candidates.Where(x => x.Type is "tel" or "number" or "text" or "password").ToList();
-                if (codeBoxes.Count == 1) otpInput = codeBoxes[0].Locator;
+                // Metadata-only fallback. Never assume that the only visible text input
+                // is the OTP field: on /register that input is often #national-id.
+                var explicitOtp = originalPage.Locator(
+                    "input:visible[autocomplete='one-time-code'], " +
+                    "input:visible[name*='otp' i], input:visible[id*='otp' i], " +
+                    "input:visible[name*='verification' i], input:visible[id*='verification' i]");
+                if (await explicitOtp.CountAsync() == 1)
+                    otpInput = explicitOtp.First;
             }
 
             if (otpInput is null)
-                throw new InvalidOperationException("کادر کد پیامکی پیدا نشد؛ برای جلوگیری از ورود کد در فیلد اشتباه، عملیات متوقف شد.");
+            {
+                var identityInputCount = await originalPage.Locator(
+                    "#register-iranian-form input:visible, #register-foreigner-form input:visible").CountAsync();
+                var body = await ReadBodyTextSafelyAsync();
+                var pageUrl = originalPage.Url;
+                var reason = identityInputCount > 0
+                    ? "صفحه فعلی فرم ثبت‌نام ایرانی/اتباع است و کادر پیامکی ندارد؛ کد به کادر کد ملی، شناسه یا فیدا وارد نشد."
+                    : "کادر اختصاصی کد پیامکی در صفحه فعلی پیدا نشد؛ هیچ فیلدی برای ورود کد انتخاب نشد.";
+                throw new InvalidOperationException(
+                    reason + $"\nنشانی صفحه: {pageUrl}\nمتن قابل مشاهده: {Truncate(body, 350)}\n" +
+                    "لطفاً صفحه‌ای را که خود سامانه برای وارد کردن کد پیامکی نمایش می‌دهد در Chrome باز کنید و دوباره اجرا کنید.");
+            }
 
+            progress.Report("کادر اختصاصی کد پیامکی پیدا شد؛ در حال تایپ رقم‌به‌رقم...");
             try
             {
-                await otpInput.ClickAsync(new LocatorClickOptions { Timeout = 2500 });
+                await otpInput.ClickAsync(new LocatorClickOptions { Timeout = 3500 });
                 await otpInput.FillAsync(string.Empty, new LocatorFillOptions { Timeout = 2500 });
                 await otpInput.PressSequentiallyAsync(code,
-                    new LocatorPressSequentiallyOptions { Timeout = 5000 });
+                    new LocatorPressSequentiallyOptions { Timeout = 10000 });
             }
             catch (PlaywrightException ex)
             {
-                if (await HasReachedAuthenticatedPageAsync())
+                if (await TryAcceptRedirectAfterTypingAsync())
                     return;
 
                 throw new InvalidOperationException("ورود کد پیامکی انجام نشد؛ صفحه Chrome را بررسی کنید.", ex);
             }
 
-            if (await HasReachedAuthenticatedPageAsync())
-                return;
+            string actual;
+            try
+            {
+                actual = ToAsciiDigits(await otpInput.InputValueAsync());
+            }
+            catch (PlaywrightException ex)
+            {
+                if (await TryAcceptRedirectAfterTypingAsync())
+                    return;
 
-            var actual = ToAsciiDigits(await otpInput.InputValueAsync());
+                throw new InvalidOperationException("مقدار کد پس از تایپ قابل بررسی نیست؛ فرم ارسال نشد.", ex);
+            }
+
             if (actual != code)
-                throw new InvalidOperationException("کد پیامکی در کادر سامانه درست ثبت نشد؛ کد را در Chrome بررسی کنید.");
+                throw new InvalidOperationException("کد پیامکی در کادر اختصاصی سامانه درست ثبت نشد؛ کد در هیچ فیلد دیگری وارد نمی‌شود.");
         }
 
-        // No extra confirm click: the portal validates the OTP from its own input handler.
-        await Task.Delay(300);
-        if (!await HasReachedAuthenticatedPageAsync())
+        progress.Report("تمام رقم‌های کد در کادر پیامکی ثبت و کنترل شدند؛ در حال بررسی پاسخ سامانه...");
+        await Task.Delay(500);
+        if (await TryAdoptAuthenticatedPortalPageAsync())
+            return;
+
+        if (_page is not null && !_page.IsClosed)
             await _page.BringToFrontAsync();
     }
 
