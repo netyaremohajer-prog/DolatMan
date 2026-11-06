@@ -37,6 +37,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
     /// </summary>
     public async Task<string> OpenLoginAsync()
     {
+        _otpRequestPending = false;
         await EnsureChromeAsync();
 
         if (_page is null || _page.IsClosed)
@@ -1311,6 +1312,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
     /// </summary>
     public async Task ResetSessionForNextApplicantAsync()
     {
+        _otpRequestPending = false;
         if (_context is not null)
         {
             try { await _context.ClearCookiesAsync(); } catch { }
