@@ -168,28 +168,54 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         // Identify the two identity fields independently. The portal sometimes renders
         // labels as sibling elements (not associated HTML <label>s), and the form may also
         // contain date controls; therefore a global "exactly two inputs" fallback is unsafe.
-        var editable = await GetEditableInputsAsync();
-        var usedFields = new HashSet<int>();
-        var firstMatch = await FindIdentityInputAsync(editable, usedFields,
-            new[] { "shenasaeiCode", "shenasaei-code", "passportCode", "passport-code", "شناسه یکتا", "شناسه", "یکتا", "کد شناسایی", "شناسایی", "گذرنامه", "فراگیر", "کد اتباع", "passport", "unique", "identity" });
-        if (firstMatch.Locator is not null) usedFields.Add(firstMatch.Index);
-        var secondMatch = await FindIdentityInputAsync(editable, usedFields,
-            new[] { "fidaCode", "fida-code", "کد فیدا", "فیدا", "fida" });
+        ILocator? first = null;
+        ILocator? second = null;
 
-        ILocator? first = firstMatch.Locator;
-        ILocator? second = secondMatch.Locator;
+        // Exact IDs taken from the uploaded live SSO registration HTML.
+        // #passport-code is the passport/unique-ID field; #shenasaei-code is FIDA.
+        var officialForeignForm = _page!.Locator("#register-foreigner-form");
+        if (await officialForeignForm.CountAsync() == 1 &&
+            await officialForeignForm.IsVisibleAsync())
+        {
+            var passportField = officialForeignForm.Locator("#passport-code");
+            var fidaField = officialForeignForm.Locator("#shenasaei-code");
+            if (await passportField.CountAsync() == 1 &&
+                await fidaField.CountAsync() == 1 &&
+                await passportField.IsVisibleAsync() &&
+                await fidaField.IsVisibleAsync() &&
+                !await passportField.IsDisabledAsync() &&
+                !await fidaField.IsDisabledAsync())
+            {
+                first = passportField;
+                second = fidaField;
+            }
+        }
+
         if (first is null || second is null)
         {
-            // Positional fallback is allowed only when exactly two editable fields exist.
-            if (editable.Count == 2)
+            var editable = await GetEditableInputsAsync();
+            var usedFields = new HashSet<int>();
+            // Do not select the FIDA field while looking for the passport/unique-ID field.
+            var firstMatch = await FindIdentityInputAsync(editable, usedFields,
+                new[] { "passportCode", "passport-code", "passPortCode", "شناسه یکتا", "شناسه", "یکتا", "کد شناسایی", "شناسایی", "گذرنامه", "فراگیر", "کد اتباع", "passport", "unique", "identity" });
+            if (firstMatch.Locator is not null) usedFields.Add(firstMatch.Index);
+            var secondMatch = await FindIdentityInputAsync(editable, usedFields,
+                new[] { "shenasaeiCode", "shenasaei-code", "fidaCode", "fida-code", "کد فیدا", "فیدا", "fida" });
+
+            first = firstMatch.Locator;
+            second = secondMatch.Locator;
+            if (first is null || second is null)
             {
-                first = editable[0].Locator;
-                second = editable[1].Locator;
-            }
-            else
-            {
-                throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync(
-                    "کادرهای شناسه یکتا و کد فیدا با اطمینان از روی مشخصات فرم شناسایی نشدند؛ اطلاعات وارد نشد تا در فیلد اشتباه قرار نگیرد."));
+                if (editable.Count == 2)
+                {
+                    first = editable[0].Locator;
+                    second = editable[1].Locator;
+                }
+                else
+                {
+                    throw new InvalidOperationException(await BuildRegistrationDiagnosticAsync(
+                        "کادرهای شماره گذرنامه/شناسه یکتا و کد فیدا با اطمینان شناسایی نشدند؛ اطلاعات وارد نشد تا در فیلد اشتباه قرار نگیرد."));
+                }
             }
         }
 
@@ -593,7 +619,11 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         // IMPORTANT: identity inputs can already exist while the "اتباع" choice is still
         // unselected. Never treat input presence as proof that the foreigners option was clicked.
         var identityFormReadyBeforeSelection = await IsIdentityFormReadyAsync();
-        var selectionConfirmed = await IsForeignersOptionSelectedAsync();
+
+        // Prefer the stable IDs from the live SSO page over generic text matching.
+        var selectionConfirmed = await TrySelectOfficialPortalForeignersTabAsync(cancellationToken);
+        if (!selectionConfirmed)
+            selectionConfirmed = await IsForeignersOptionSelectedAsync();
 
         var renderWait = DateTime.UtcNow;
         while (!selectionConfirmed && DateTime.UtcNow - renderWait < TimeSpan.FromSeconds(20))
@@ -884,6 +914,80 @@ public sealed class ChromeAutomationService : IAsyncDisposable
             "گزینه «اتباع» انتخاب شد، اما کادرهای شناسه یکتا و کد فیدا در صفحه ظاهر نشدند."));
     }
 
+    private async Task<bool> TrySelectOfficialPortalForeignersTabAsync(CancellationToken cancellationToken)
+    {
+        if (_page is null || _page.IsClosed)
+            return false;
+
+        var button = _page.Locator("#foreigner-btn");
+        if (await button.CountAsync() != 1 || !await button.IsVisibleAsync())
+            return false;
+
+        if (await IsOfficialPortalForeignersFormReadyAsync())
+            return true;
+
+        cancellationToken.ThrowIfCancellationRequested();
+        try
+        {
+            await button.ScrollIntoViewIfNeededAsync();
+            await button.ClickAsync(new LocatorClickOptions { Timeout = 6000 });
+        }
+        catch (PlaywrightException)
+        {
+            // The live portal uses a DIV with a click listener, not a native button.
+            // Fallback is limited to this exact, known element.
+            try { await button.EvaluateAsync("el => el.click()"); }
+            catch (PlaywrightException) { return false; }
+        }
+
+        var started = DateTime.UtcNow;
+        while (DateTime.UtcNow - started < TimeSpan.FromSeconds(10))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (await IsOfficialPortalForeignersFormReadyAsync())
+                return true;
+            await Task.Delay(200, cancellationToken);
+        }
+
+        return false;
+    }
+
+    private async Task<bool> IsOfficialPortalForeignersFormReadyAsync()
+    {
+        if (_page is null || _page.IsClosed)
+            return false;
+
+        var foreignerButton = _page.Locator("#foreigner-btn");
+        var iranianButton = _page.Locator("#iranian-btn");
+        var foreignerForm = _page.Locator("#register-foreigner-form");
+        var iranianForm = _page.Locator("#register-iranian-form");
+
+        if (await foreignerButton.CountAsync() != 1 ||
+            await iranianButton.CountAsync() != 1 ||
+            await foreignerForm.CountAsync() != 1 ||
+            await iranianForm.CountAsync() != 1)
+            return false;
+
+        if (await foreignerButton.GetAttributeAsync("data-selected") != "true" ||
+            await iranianButton.GetAttributeAsync("data-selected") != "false")
+            return false;
+
+        if (!await foreignerForm.IsVisibleAsync() || await iranianForm.IsVisibleAsync())
+            return false;
+
+        var passport = foreignerForm.Locator("#passport-code");
+        var fida = foreignerForm.Locator("#shenasaei-code");
+        var nationalityFlag = foreignerForm.Locator("input[name='iranian'][value='false']");
+
+        return await passport.CountAsync() == 1 &&
+               await fida.CountAsync() == 1 &&
+               await nationalityFlag.CountAsync() == 1 &&
+               await passport.IsVisibleAsync() &&
+               await fida.IsVisibleAsync() &&
+               !await passport.IsDisabledAsync() &&
+               !await fida.IsDisabledAsync();
+    }
+
     private async Task<bool> IsForeignersOptionVisibleAsync()
     {
         foreach (var frame in _page!.Frames)
@@ -925,6 +1029,11 @@ public sealed class ChromeAutomationService : IAsyncDisposable
 
     private async Task<bool> IsForeignersOptionSelectedAsync()
     {
+        var officialForm = _page!.Locator("#register-foreigner-form");
+        var officialButton = _page.Locator("#foreigner-btn");
+        if (await officialForm.CountAsync() == 1 && await officialButton.CountAsync() == 1)
+            return await IsOfficialPortalForeignersFormReadyAsync();
+
         foreach (var frame in _page!.Frames)
         {
             try
@@ -1008,6 +1117,22 @@ public sealed class ChromeAutomationService : IAsyncDisposable
 
     private async Task<bool> IsIdentityFormReadyAsync()
     {
+        var officialForm = _page!.Locator("#register-foreigner-form");
+        if (await officialForm.CountAsync() == 1)
+        {
+            if (!await officialForm.IsVisibleAsync())
+                return false;
+
+            var passport = officialForm.Locator("#passport-code");
+            var fida = officialForm.Locator("#shenasaei-code");
+            return await passport.CountAsync() == 1 &&
+                   await fida.CountAsync() == 1 &&
+                   await passport.IsVisibleAsync() &&
+                   await fida.IsVisibleAsync() &&
+                   !await passport.IsDisabledAsync() &&
+                   !await fida.IsDisabledAsync();
+        }
+
         var editable = await GetEditableInputsAsync();
         var used = new HashSet<int>();
         var first = await FindIdentityInputAsync(editable, used,
