@@ -25,6 +25,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
     private IPlaywright? _playwright;
     private IBrowserContext? _context;
     private IPage? _page;
+    private bool _otpRequestPending;
 
     public bool IsOpen => _context is not null && _page is not null && !_page.IsClosed;
     public string CurrentUrl => IsOpen ? _page!.Url : "مرورگر هنوز باز نشده است";
@@ -359,6 +360,7 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         if (sendButton is null)
             throw new InvalidOperationException("دکمه «ارسال کد» پیدا نشد. کد امنیتی وارد شد؛ صفحه Chrome را بررسی کنید.");
         await sendButton.ClickAsync(new LocatorClickOptions { Timeout = 15000 });
+        _otpRequestPending = true;
         // Bring the official Chrome window forward so the operator can enter the SMS code there.
         await _page!.BringToFrontAsync();
     }
@@ -372,7 +374,21 @@ public sealed class ChromeAutomationService : IAsyncDisposable
 
         var originalPage = _page!;
         var originalUrl = originalPage.Url;
-        progress.Report($"کد دریافت شد؛ در حال شناسایی کادر پیامکی در صفحه {originalUrl}...");
+        progress.Report($"کد دریافت شد؛ در حال بررسی همه تب‌های Chrome در صفحه {originalUrl}...");
+
+        // Some portal sessions navigate to /register as soon as the SMS is issued or
+        // verified by the portal's own flow. Inspect every Chrome tab BEFORE looking for
+        // an OTP input, otherwise the stale /login page can be used while the visible
+        // Chrome tab is already the identity-registration form.
+        if (_otpRequestPending && await TryAdoptAuthenticatedPortalPageAsync())
+        {
+            _otpRequestPending = false;
+            progress.Report($"سامانه صفحه بعد از ورود را باز کرده است ({_page!.Url})؛ کد پیامکی در فرم هویتی وارد نمی‌شود.");
+            return;
+        }
+
+        originalPage = _page!;
+        originalUrl = originalPage.Url;
 
         async Task<bool> TryAcceptRedirectAfterTypingAsync()
         {
@@ -517,7 +533,10 @@ public sealed class ChromeAutomationService : IAsyncDisposable
         progress.Report("تمام رقم‌های کد در کادر پیامکی ثبت و کنترل شدند؛ در حال بررسی پاسخ سامانه...");
         await Task.Delay(500);
         if (await TryAdoptAuthenticatedPortalPageAsync())
+        {
+            _otpRequestPending = false;
             return;
+        }
 
         if (_page is not null && !_page.IsClosed)
             await _page.BringToFrontAsync();
