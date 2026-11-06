@@ -96,7 +96,7 @@ Console.WriteLine("PASS: sibling FIDA label and custom Jalali day/month/year dro
 await RunAuthenticatedSecondTabRegressionAsync();
 Console.WriteLine("PASS: automation adopts the authenticated SSO registration tab opened after OTP.");
 
-Console.WriteLine($"All {scenarios.Length} foreigners-selection regression tests passed.");
+Console.WriteLine("All regression scenarios completed successfully.");
 
 static async Task RunClickableLookupRegressionAsync()
 {
